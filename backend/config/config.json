@@ -1,0 +1,29 @@
+{
+  "development": {
+    "username": "postgres",
+    "password": "02November@2012",
+    "database": "microblogging_dev",
+    "host": "localhost",
+    "port": 5432,
+    "dialect": "postgres",
+    "logging": false
+  },
+  "test": {
+    "username": "postgres",
+    "password": "02November@2012",
+    "database": "microblogging_test",
+    "host": "localhost",
+    "port": 5432,
+    "dialect": "postgres",
+    "logging": false
+  },
+  "production": {
+    "username": "postgres",
+    "password": "02November@2012",
+    "database": "microblogging_prod",
+    "host": "localhost",
+    "port": 5432,
+    "dialect": "postgres",
+    "logging": false
+  }
+}

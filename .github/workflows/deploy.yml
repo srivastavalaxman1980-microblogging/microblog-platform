@@ -1,0 +1,87 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, staging ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  DOCKER_IMAGE: microblog-platform
+  DOCKER_TAG: ${{ github.sha }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          npm ci
+          
+      - name: Run backend tests
+        run: |
+          cd backend
+          npm test
+          
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        
+      - name: Build backend Docker image
+        run: |
+          docker build -t ${{ env.DOCKER_IMAGE }}-backend:${{ env.DOCKER_TAG }} ./backend
+          
+      - name: Build frontend Docker image
+        run: |
+          docker build -t ${{ env.DOCKER_IMAGE }}-frontend:${{ env.DOCKER_TAG }} ./frontend
+          
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          
+      - name: Push images
+        run: |
+          docker push ${{ env.DOCKER_IMAGE }}-backend:${{ env.DOCKER_TAG }}
+          docker push ${{ env.DOCKER_IMAGE }}-frontend:${{ env.DOCKER_TAG }}
+          
+  migrate:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Run migrations
+        run: |
+          cd backend
+          npm run migrate
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          
+  deploy:
+    needs: migrate
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Deploy to production
+        run: |
+          echo "Deploying ${{ env.DOCKER_TAG }} to production..."
+          # Add your deployment commands (Kubernetes, AWS ECS, etc.)

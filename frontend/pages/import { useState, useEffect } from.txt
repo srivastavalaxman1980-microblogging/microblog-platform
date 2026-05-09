@@ -1,0 +1,32 @@
+import { useState, useEffect } from 'react';
+import { Toaster } from 'react-hot-toast';
+import '../styles/globals.css';
+
+function MyApp({ Component, pageProps }) {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    const storedUser = localStorage.getItem('user');
+    if (token && storedUser) {
+      setIsAuthenticated(true);
+      setUser(JSON.parse(storedUser));
+    }
+  }, []);
+
+  return (
+    <>
+      <Toaster position="top-right" />
+      <Component 
+        {...pageProps} 
+        isAuthenticated={isAuthenticated}
+        setIsAuthenticated={setIsAuthenticated}
+        user={user}
+        setUser={setUser}
+      />
+    </>
+  );
+}
+
+export default MyApp;

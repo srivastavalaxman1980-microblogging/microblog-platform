@@ -1,0 +1,28 @@
+// Create post - WITHOUT HASHTAGS (temporary fix)
+router.post('/', authMiddleware, async (req, res) => {
+  try {
+    const { content, media_urls, visibility } = req.body;
+    
+    if (!content || content.trim() === '') {
+      return res.status(400).json({ error: 'Content is required' });
+    }
+    
+    // Create post without hashtags
+    const post = await Post.create({
+      user_id: req.user.id,
+      content: content,
+      media_urls: media_urls || [],
+      visibility: visibility || 'public'
+    });
+    
+    // Return post with user data
+    const postWithUser = await Post.findByPk(post.id, {
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }]
+    });
+    
+    res.status(201).json(postWithUser);
+  } catch (error) {
+    console.error('Post creation error:', error);
+    res.status(500).json({ error: 'Server error: ' + error.message });
+  }
+});
