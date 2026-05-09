@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { sequelize, User, Post, Comment, Follower } = require('./models');
@@ -5,34 +6,68 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
 const app = express();
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
-// Enhanced CORS configuration
+// CORS configuration for production
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://localhost:3002',
+  'http://localhost:3003',
+  'https://microblog-frontend.onrender.com',
+  process.env.FRONTEND_URL
+].filter(Boolean);
+
 app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'http://localhost:3001', 
-    'http://localhost:3002',
-    'http://localhost:3003',
-    'http://127.0.0.1:3000',
-    'http://127.0.0.1:3001',
-    'http://127.0.0.1:3002',
-    'http://127.0.0.1:3003'
-  ],
+  origin: function(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-  exposedHeaders: ['Authorization']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
 app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Request logging
-app.use((req, res, next) => {
-  console.log(`${req.method} ${req.url}`);
-  next();
+// Request logging in production
+if (process.env.NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    console.log(`${req.method} ${req.url} - ${new Date().toISOString()}`);
+    next();
+  });
+}
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(), 
+    port: PORT,
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
+
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'MicroBlog API is running',
+    version: '1.0.0',
+    status: 'active',
+    endpoints: {
+      health: 'GET /health',
+      auth: 'POST /api/auth/register, POST /api/auth/login',
+      posts: 'GET /api/posts/feed, POST /api/posts, PUT /api/posts/:id, DELETE /api/posts/:id',
+      comments: 'GET /api/posts/:postId/comments, POST /api/posts/:postId/comments',
+      users: 'GET /api/users/:identifier, PUT /api/users/profile, POST /api/users/:userId/follow'
+    }
+  });
 });
 
 // Auth middleware
@@ -58,38 +93,6 @@ const auth = async (req, res, next) => {
     res.status(401).json({ error: 'Invalid token' });
   }
 };
-
-// ============ HEALTH & ROOT ENDPOINTS ============
-
-app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString(), port: PORT });
-});
-
-app.get('/', (req, res) => {
-  res.json({ 
-    message: 'MicroBlog API is running',
-    version: '1.0.0',
-    endpoints: {
-      health: 'GET /health',
-      login: 'POST /api/auth/login',
-      register: 'POST /api/auth/register',
-      feed: 'GET /api/posts/feed',
-      createPost: 'POST /api/posts',
-      editPost: 'PUT /api/posts/:id',
-      deletePost: 'DELETE /api/posts/:id',
-      likePost: 'POST /api/posts/:id/like',
-      profile: 'GET /api/users/:identifier',
-      updateProfile: 'PUT /api/users/profile',
-      follow: 'POST /api/users/:userId/follow',
-      unfollow: 'DELETE /api/users/:userId/follow',
-      followers: 'GET /api/users/:userId/followers',
-      following: 'GET /api/users/:userId/following',
-      comments: 'GET /api/posts/:postId/comments',
-      createComment: 'POST /api/posts/:postId/comments',
-      deleteComment: 'DELETE /api/comments/:commentId'
-    }
-  });
-});
 
 // ============ AUTHENTICATION ROUTES ============
 
@@ -163,6 +166,9 @@ app.post('/api/auth/login', async (req, res) => {
     if (!valid) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+    
+    // Update last login
+    await user.update({ last_login_at: new Date() });
     
     const token = jwt.sign(
       { id: user.id, username: user.username },
@@ -458,10 +464,8 @@ app.post('/api/users/:userId/follow', auth, async (req, res) => {
       }
     });
     
-    if (existingFollow) {
-      if (existingFollow.status === 'accepted') {
-        return res.status(400).json({ error: 'Already following this user' });
-      }
+    if (existingFollow && existingFollow.status === 'accepted') {
+      return res.status(400).json({ error: 'Already following this user' });
     }
     
     await Follower.upsert({
@@ -557,7 +561,13 @@ app.get('/api/posts/:postId/comments', auth, async (req, res) => {
       where: { post_id: postId, is_deleted: false, parent_comment_id: null },
       include: [
         { model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] },
-        { model: Comment, as: 'replies', where: { is_deleted: false }, required: false, include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] }
+        { 
+          model: Comment, 
+          as: 'replies', 
+          where: { is_deleted: false }, 
+          required: false, 
+          include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }]
+        }
       ],
       order: [['created_at', 'DESC']]
     });
@@ -647,14 +657,13 @@ const startServer = async () => {
   try {
     await sequelize.authenticate();
     console.log('✅ Database connected successfully');
-    
-    await sequelize.sync({ alter: true });
-    console.log('✅ Database synced');
+    console.log(`📊 Database: ${process.env.DB_NAME || 'microblogging_dev'}`);
     
     app.listen(PORT, () => {
       console.log(`\n🚀 Server running on http://localhost:${PORT}`);
       console.log(`📝 Health check: http://localhost:${PORT}/health`);
-      console.log(`🔗 API base: http://localhost:${PORT}/api\n`);
+      console.log(`🔗 API base: http://localhost:${PORT}/api`);
+      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}\n`);
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error);

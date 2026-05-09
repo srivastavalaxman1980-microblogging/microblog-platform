@@ -1,0 +1,61 @@
+services:
+  # Backend API Service
+  - type: web
+    name: microblog-backend
+    runtime: node
+    plan: free
+    buildCommand: cd backend && npm install
+    startCommand: cd backend && node server-simple.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DB_HOST
+        fromDatabase:
+          name: microblog-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: microblog-db
+          property: port
+      - key: DB_USER
+        fromDatabase:
+          name: microblog-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: microblog-db
+          property: password
+      - key: DB_NAME
+        fromDatabase:
+          name: microblog-db
+          property: database
+      - key: FRONTEND_URL
+        fromService:
+          name: microblog-frontend
+          type: web
+          property: url
+
+  # Frontend Service
+  - type: web
+    name: microblog-frontend
+    runtime: node
+    plan: free
+    buildCommand: cd frontend && npm install && npm run build
+    startCommand: cd frontend && npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: API_URL
+        fromService:
+          name: microblog-backend
+          type: web
+          property: url
+          value: /api
+
+  # PostgreSQL Database
+  - type: pgsql
+    name: microblog-db
+    plan: free
+    ipAllowList: []
