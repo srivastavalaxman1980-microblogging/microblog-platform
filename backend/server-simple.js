@@ -8,8 +8,62 @@ const jwt = require('jsonwebtoken');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Debug: Log environment (without exposing full password)
-console.log('=== ENVIRONMENT CHECK ===');
+// ============ CORS CONFIGURATION ============
+// List all allowed origins
+const allowedOrigins = [
+  // Local development
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://localhost:3002',
+  'http://localhost:3003',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:3001',
+  'http://127.0.0.1:3002',
+  'http://127.0.0.1:3003',
+  
+  // Production frontends (add all variants)
+  'https://microblog-frontend.onrender.com',
+  'https://microblog-frontend-k7mj.onrender.com',
+  
+  // From environment variable (for flexibility)
+  process.env.FRONTEND_URL
+].filter(Boolean);
+
+console.log('🚫 CORS Allowed Origins:');
+allowedOrigins.forEach(origin => console.log(`   - ${origin}`));
+
+// Configure CORS middleware
+app.use(cors({
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) {
+      console.log('✅ CORS: Request with no origin allowed');
+      return callback(null, true);
+    }
+    
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = `CORS blocked: ${origin} not allowed`;
+      console.log('❌', msg);
+      return callback(new Error(msg), false);
+    }
+    
+    console.log('✅ CORS allowed origin:', origin);
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  exposedHeaders: ['Authorization']
+}));
+
+// Handle preflight requests
+app.options('*', cors());
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ============ ENVIRONMENT DEBUG ============
+console.log('\n=== ENVIRONMENT CHECK ===');
 console.log('NODE_ENV:', process.env.NODE_ENV);
 console.log('PORT:', PORT);
 console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
@@ -22,35 +76,7 @@ if (process.env.DATABASE_URL) {
   }
 }
 console.log('JWT_SECRET exists:', !!process.env.JWT_SECRET);
-console.log('========================');
-
-// CORS configuration
-const allowedOrigins = [
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://localhost:3002',
-  'http://localhost:3003',
-  'https://microblog-frontend.onrender.com',
-  process.env.FRONTEND_URL
-].filter(Boolean);
-
-app.use(cors({
-  origin: function(origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) === -1) {
-      console.log('CORS blocked origin:', origin);
-      return callback(null, false);
-    }
-    return callback(null, true);
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
-app.options('*', cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+console.log('========================\n');
 
 // ============ HEALTH & ROOT ENDPOINTS ============
 
@@ -60,7 +86,7 @@ app.get('/health', (req, res) => {
     status: 'OK', 
     timestamp: new Date().toISOString(), 
     port: PORT,
-    database_connected: !!sequelize
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
@@ -80,7 +106,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// Auth middleware
+// ============ AUTH MIDDLEWARE ============
 const auth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
@@ -229,7 +255,16 @@ app.get('/api/users/:identifier', auth, async (req, res) => {
       limit: 10
     });
     
-    res.json({ user: { ...user.toJSON(), post_count: postCount }, isFollowing, recentPosts });
+    res.json({ 
+      user: { 
+        ...user.toJSON(), 
+        post_count: postCount,
+        followers_count: user.followers_count || 0,
+        following_count: user.following_count || 0
+      }, 
+      isFollowing, 
+      recentPosts 
+    });
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({ error: error.message });
@@ -557,13 +592,11 @@ app.delete('/api/comments/:commentId', auth, async (req, res) => {
   }
 });
 
-// ============ 404 HANDLER ============
+// ============ 404 & ERROR HANDLERS ============
 
 app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });
 });
-
-// ============ ERROR HANDLER ============
 
 app.use((err, req, res, next) => {
   console.error('Global error:', err);
@@ -583,7 +616,8 @@ const startServer = async () => {
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`\n🚀 Server running on http://0.0.0.0:${PORT}`);
       console.log(`📝 Health check: http://localhost:${PORT}/health`);
-      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}\n`);
+      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`🔗 API base: /api\n`);
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error.message);
