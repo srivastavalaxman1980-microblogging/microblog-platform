@@ -2,18 +2,24 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import axios from 'axios';
 import toast from 'react-hot-toast';
+import Link from 'next/link';
 import Navbar from '../../components/Navbar';
 
-const API_URL = 'http://localhost:5000/api';
+// Get API URL from environment or use default
+const API_URL = process.env.NEXT_PUBLIC_API_URL || process.env.API_URL || 'https://microblog-backend-1jv9.onrender.com/api';
 
 export default function ProfilePage({ user: currentUser, isAuthenticated }) {
   const router = useRouter();
   const { id } = router.query;
+  
   const [profile, setProfile] = useState(null);
   const [posts, setPosts] = useState([]);
   const [isFollowing, setIsFollowing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
+  const [activeTab, setActiveTab] = useState('posts');
+  const [followers, setFollowers] = useState([]);
+  const [following, setFollowing] = useState([]);
   const [editForm, setEditForm] = useState({
     full_name: '',
     bio: '',
@@ -21,9 +27,6 @@ export default function ProfilePage({ user: currentUser, isAuthenticated }) {
     website: '',
     avatar_url: ''
   });
-  const [activeTab, setActiveTab] = useState('posts');
-  const [followers, setFollowers] = useState([]);
-  const [following, setFollowing] = useState([]);
 
   useEffect(() => {
     if (id && isAuthenticated) {
@@ -35,16 +38,35 @@ export default function ProfilePage({ user: currentUser, isAuthenticated }) {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
+      if (!token) {
+        console.error('No token found');
+        toast.error('Please login first');
+        router.push('/');
+        return;
+      }
+      
+      console.log('Fetching profile for ID:', id);
+      console.log('API_URL:', API_URL);
+      
       const response = await axios.get(`${API_URL}/users/${id}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       
+      console.log('Profile response:', response.data);
       setProfile(response.data.user);
       setPosts(response.data.recentPosts || []);
       setIsFollowing(response.data.isFollowing || false);
     } catch (error) {
       console.error('Error fetching profile:', error);
-      toast.error('Failed to load profile');
+      if (error.response) {
+        console.error('Response data:', error.response.data);
+        toast.error(error.response.data?.error || 'Failed to load profile');
+      } else if (error.request) {
+        console.error('No response from server');
+        toast.error('Cannot connect to server. Please try again.');
+      } else {
+        toast.error('Error loading profile');
+      }
     } finally {
       setLoading(false);
     }
@@ -59,6 +81,7 @@ export default function ProfilePage({ user: currentUser, isAuthenticated }) {
       setFollowers(response.data);
     } catch (error) {
       console.error('Error fetching followers:', error);
+      toast.error('Failed to load followers');
     }
   };
 
@@ -71,6 +94,7 @@ export default function ProfilePage({ user: currentUser, isAuthenticated }) {
       setFollowing(response.data);
     } catch (error) {
       console.error('Error fetching following:', error);
+      toast.error('Failed to load following');
     }
   };
 
@@ -82,15 +106,18 @@ export default function ProfilePage({ user: currentUser, isAuthenticated }) {
           headers: { Authorization: `Bearer ${token}` }
         });
         toast.success('Unfollowed user');
+        setIsFollowing(false);
+        setProfile(prev => prev ? { ...prev, followers_count: (prev.followers_count || 1) - 1 } : prev);
       } else {
         await axios.post(`${API_URL}/users/${id}/follow`, {}, {
           headers: { Authorization: `Bearer ${token}` }
         });
         toast.success('Now following user');
+        setIsFollowing(true);
+        setProfile(prev => prev ? { ...prev, followers_count: (prev.followers_count || 0) + 1 } : prev);
       }
-      setIsFollowing(!isFollowing);
-      fetchProfile();
     } catch (error) {
+      console.error('Follow error:', error);
       toast.error(error.response?.data?.error || 'Action failed');
     }
   };
@@ -109,10 +136,13 @@ export default function ProfilePage({ user: currentUser, isAuthenticated }) {
       
       // Update current user in localStorage
       const storedUser = JSON.parse(localStorage.getItem('user'));
-      storedUser.full_name = response.data.user.full_name;
-      localStorage.setItem('user', JSON.stringify(storedUser));
+      if (storedUser) {
+        storedUser.full_name = response.data.user.full_name;
+        localStorage.setItem('user', JSON.stringify(storedUser));
+      }
     } catch (error) {
-      toast.error('Failed to update profile');
+      console.error('Update profile error:', error);
+      toast.error(error.response?.data?.error || 'Failed to update profile');
     }
   };
 
@@ -147,6 +177,12 @@ export default function ProfilePage({ user: currentUser, isAuthenticated }) {
         <Navbar currentUser={currentUser} />
         <div className="max-w-3xl mx-auto px-4 py-12 text-center">
           <div className="text-gray-500">User not found</div>
+          <button
+            onClick={() => router.push('/')}
+            className="mt-4 bg-primary text-white px-4 py-2 rounded-full hover:bg-blue-600"
+          >
+            Go Home
+          </button>
         </div>
       </div>
     );
@@ -297,10 +333,22 @@ export default function ProfilePage({ user: currentUser, isAuthenticated }) {
             ) : (
               posts.map((post) => (
                 <div key={post.id} className="bg-white rounded-lg shadow p-4">
+                  <div className="flex items-center space-x-2 mb-2">
+                    <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center text-white text-xs font-bold">
+                      {profile.username?.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <p className="font-semibold text-sm">{profile.full_name || profile.username}</p>
+                      <p className="text-xs text-gray-500">@{profile.username}</p>
+                    </div>
+                  </div>
                   <p className="text-gray-800">{post.content}</p>
                   <div className="flex items-center space-x-4 mt-3 text-sm text-gray-500">
                     <span>❤️ {post.likes_count || 0}</span>
                     <span>💬 {post.comments_count || 0}</span>
+                    <span className="text-xs">
+                      {new Date(post.created_at).toLocaleDateString()}
+                    </span>
                   </div>
                 </div>
               ))
