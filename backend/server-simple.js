@@ -150,6 +150,9 @@ const auth = async (req, res, next) => {
   }
 };
 
+app.get('/api/test', (req, res) => {
+  res.json({ message: 'API is working!' });
+});
 // ============ AUTHENTICATION ============
 app.post('/api/auth/register', async (req, res) => {
   try {
@@ -477,7 +480,7 @@ app.delete('/api/upload/:publicId', auth, async (req, res) => {
 });
 
 // ============ NOTIFICATION ROUTES ============
-app.get('/api/notifications', auth, async (req, res) => {
+/*app.get('/api/notifications', auth, async (req, res) => {
   const notifications = await Notification.findAll({
     where: { user_id: req.user.id },
     order: [['created_at', 'DESC']],
@@ -496,7 +499,7 @@ app.put('/api/notifications/:id/read', auth, async (req, res) => {
 app.put('/api/notifications/read-all', auth, async (req, res) => {
   await Notification.update({ is_read: true, read_at: new Date() }, { where: { user_id: req.user.id, is_read: false } });
   res.json({ message: 'All marked as read' });
-});
+});*/
 
 // ============ TEMPORARY SEED ENDPOINT ============
 app.get('/api/seed-demo-users', async (req, res) => {
