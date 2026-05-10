@@ -498,6 +498,55 @@ app.put('/api/notifications/read-all', auth, async (req, res) => {
   res.json({ message: 'All marked as read' });
 });
 
+// ============ TEMPORARY SEED ENDPOINT ============
+app.get('/api/seed-demo-users', async (req, res) => {
+  try {
+    const bcrypt = require('bcryptjs');
+    const { v4: uuidv4 } = require('uuid');
+
+    const userCount = await User.count();
+    if (userCount > 0) {
+      return res.json({ message: 'Users already exist. No seeding needed.' });
+    }
+
+    await User.bulkCreate([
+      {
+        id: uuidv4(),
+        username: 'john_doe',
+        email: 'john@example.com',
+        password_hash: await bcrypt.hash('John123!', 10),
+        full_name: 'John Doe',
+        bio: 'Software developer',
+        role: 'user'
+      },
+      {
+        id: uuidv4(),
+        username: 'jane_smith',
+        email: 'jane@example.com',
+        password_hash: await bcrypt.hash('Jane123!', 10),
+        full_name: 'Jane Smith',
+        bio: 'Digital marketer',
+        role: 'user'
+      },
+      {
+        id: uuidv4(),
+        username: 'admin',
+        email: 'admin@microblog.com',
+        password_hash: await bcrypt.hash('Admin123!', 10),
+        full_name: 'Admin User',
+        bio: 'Platform administrator',
+        role: 'admin',
+        verified: true
+      }
+    ]);
+
+    res.json({ message: '✅ Seeded 3 demo users.' });
+  } catch (error) {
+    console.error('Seed error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============ 404 & ERROR HANDLERS ============
 app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });
