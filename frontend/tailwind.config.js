@@ -8,11 +8,15 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        primary: '#1DA1F2',
-        secondary: '#14171A',
-        dark: '#657786',
-        light: '#E1E8ED',
-      }
+        primary: '#FF3B30',      // Truth Social red
+        secondary: '#1DA1F2',    // Accent blue
+        dark: '#0A0A0A',
+        darker: '#000000',
+        card: '#1A1A1A',
+      },
+      fontFamily: {
+        sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'sans-serif'],
+      },
     },
   },
   plugins: [],

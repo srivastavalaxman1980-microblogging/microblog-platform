@@ -4,16 +4,33 @@
 
 @layer base {
   body {
-    @apply bg-gray-50;
+    @apply bg-black text-white;
   }
 }
 
 @layer components {
+  /* Primary button (red, like Truth Social) */
   .btn-primary {
-    @apply bg-primary text-white px-4 py-2 rounded-full hover:bg-blue-600 transition duration-200;
+    @apply bg-red-500 text-white px-6 py-2 rounded-full font-semibold hover:bg-red-600 transition duration-200;
   }
   
+  /* Outline button */
   .btn-outline {
-    @apply border border-primary text-primary px-4 py-2 rounded-full hover:bg-primary hover:text-white transition duration-200;
+    @apply border border-red-500 text-red-500 px-6 py-2 rounded-full font-semibold hover:bg-red-500 hover:text-white transition;
+  }
+  
+  /* Card background */
+  .card {
+    @apply bg-gray-900 rounded-xl p-4 border border-gray-800;
+  }
+  
+  /* Input fields */
+  .input-dark {
+    @apply bg-gray-800 border border-gray-700 rounded-lg p-3 focus:outline-none focus:border-red-500 text-white;
+  }
+  
+  /* Link hover */
+  .link-hover {
+    @apply hover:text-red-500 transition;
   }
 }

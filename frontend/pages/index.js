@@ -7,6 +7,15 @@ import ImageUploader from '../components/ImageUploader';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || process.env.API_URL || 'https://microblog-backend-1jv9.onrender.com/api';
 
+// Axios interceptor to attach token to every request
+axios.interceptors.request.use(config => {
+  const token = localStorage.getItem('token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 export default function Home({ isAuthenticated, user, setIsAuthenticated, setUser }) {
   const [posts, setPosts] = useState([]);
   const [content, setContent] = useState('');
@@ -21,12 +30,10 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
   const fetchFeed = async () => {
     setFeedLoading(true);
     try {
-      const token = localStorage.getItem('token');
-      const res = await axios.get(`${API_URL}/posts/feed`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const res = await axios.get(`${API_URL}/posts/feed`);
       setPosts(res.data.posts || []);
     } catch (error) {
+      console.error('Feed error:', error);
       toast.error('Failed to load feed');
     } finally {
       setFeedLoading(false);
@@ -36,16 +43,14 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
   const handleCreatePost = async (e) => {
     e.preventDefault();
     if (!content.trim() && images.length === 0) {
-      toast.error('Please add content or images');
+      toast.error('Add content or images');
       return;
     }
     setLoading(true);
     try {
-      const token = localStorage.getItem('token');
       const media_urls = images.map(img => img.url);
       await axios.post(`${API_URL}/posts`, 
-        { content: content.trim(), visibility: 'public', media_urls },
-        { headers: { Authorization: `Bearer ${token}` } }
+        { content: content.trim(), visibility: 'public', media_urls }
       );
       toast.success('Post created!');
       setContent('');
@@ -60,10 +65,7 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
 
   const handleLike = async (postId) => {
     try {
-      const token = localStorage.getItem('token');
-      const res = await axios.post(`${API_URL}/posts/${postId}/like`, {}, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const res = await axios.post(`${API_URL}/posts/${postId}/like`);
       setPosts(prev => prev.map(p => p.id === postId ? { ...p, likes_count: res.data.likes_count } : p));
     } catch (error) {
       toast.error('Failed to like');
@@ -73,10 +75,7 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
   const handleDeletePost = async (postId) => {
     if (!confirm('Delete this post?')) return;
     try {
-      const token = localStorage.getItem('token');
-      await axios.delete(`${API_URL}/posts/${postId}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      await axios.delete(`${API_URL}/posts/${postId}`);
       toast.success('Post deleted');
       fetchFeed();
     } catch (error) {
@@ -101,28 +100,29 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-black">
       <Navbar currentUser={user} />
       <div className="max-w-2xl mx-auto px-4 py-6">
-        <div className="bg-white rounded-lg shadow p-4 mb-6">
+        {/* Post composer - dark card */}
+        <div className="bg-gray-900 rounded-xl border border-gray-800 p-4 mb-6">
           <form onSubmit={handleCreatePost}>
             <textarea
               value={content}
               onChange={(e) => setContent(e.target.value)}
               placeholder="What's happening?"
-              className="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:border-primary resize-none"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 focus:outline-none focus:border-red-500 text-white resize-none"
               rows="3"
               maxLength="280"
             />
             <ImageUploader onImagesUploaded={setImages} maxImages={4} />
             <div className="flex justify-between items-center mt-3">
-              <span className={`text-sm ${content.length > 260 ? 'text-orange-500' : 'text-gray-500'}`}>
+              <span className={`text-sm ${content.length > 260 ? 'text-red-400' : 'text-gray-500'}`}>
                 {content.length}/280
               </span>
               <button
                 type="submit"
                 disabled={loading}
-                className="bg-primary text-white px-6 py-2 rounded-full hover:bg-blue-600 disabled:opacity-50"
+                className="bg-red-500 text-white px-6 py-2 rounded-full font-semibold hover:bg-red-600 disabled:opacity-50 transition"
               >
                 {loading ? 'Posting...' : 'Post'}
               </button>
@@ -131,12 +131,12 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
         </div>
 
         {feedLoading ? (
-          <div className="text-center py-12">Loading posts...</div>
+          <div className="text-center py-12 text-gray-500">Loading posts...</div>
         ) : (
           <div className="space-y-4">
             {posts.length === 0 ? (
-              <div className="text-center py-12 bg-white rounded-lg shadow">
-                <p>No posts yet. Be the first!</p>
+              <div className="text-center py-12 bg-gray-900 rounded-xl border border-gray-800">
+                <p className="text-gray-500">No posts yet. Be the first!</p>
               </div>
             ) : (
               posts.map(post => (
@@ -157,9 +157,8 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
   );
 }
 
-// LoginPage component (unchanged, keep your existing one)
+// Login Page (dark theme, Aureon branding)
 function LoginPage({ setIsAuthenticated, setUser }) {
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || process.env.API_URL || 'https://microblog-backend-1jv9.onrender.com/api';
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -198,27 +197,65 @@ function LoginPage({ setIsAuthenticated, setUser }) {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-white flex items-center justify-center px-4">
-      <div className="max-w-md w-full bg-white rounded-lg shadow-xl p-8">
-        <h1 className="text-4xl font-bold text-primary text-center mb-2">MicroBlog</h1>
-        <p className="text-gray-500 text-center mb-8">Connect, share, and discover</p>
-        <h2 className="text-xl font-semibold text-center mb-6">{isLogin ? 'Welcome Back!' : 'Create Account'}</h2>
+    <div className="min-h-screen bg-black flex items-center justify-center px-4">
+      <div className="max-w-md w-full bg-gray-900 rounded-xl border border-gray-800 shadow-xl p-8">
+        <h1 className="text-4xl font-bold bg-gradient-to-r from-red-500 to-white bg-clip-text text-transparent text-center mb-2">
+          Aureon
+        </h1>
+        <p className="text-gray-500 text-center mb-8">Connect, share, discover</p>
+        <h2 className="text-xl font-semibold text-white text-center mb-6">
+          {isLogin ? 'Welcome Back!' : 'Create Account'}
+        </h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           {!isLogin && (
             <>
-              <input type="text" placeholder="Username *" value={username} onChange={(e) => setUsername(e.target.value)} className="w-full border border-gray-300 rounded-lg p-3" required />
-              <input type="text" placeholder="Full Name" value={fullName} onChange={(e) => setFullName(e.target.value)} className="w-full border border-gray-300 rounded-lg p-3" />
+              <input
+                type="text"
+                placeholder="Username *"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-white focus:outline-none focus:border-red-500"
+                required
+              />
+              <input
+                type="text"
+                placeholder="Full Name"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-white focus:outline-none focus:border-red-500"
+              />
             </>
           )}
-          <input type="email" placeholder="Email *" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full border border-gray-300 rounded-lg p-3" required />
-          <input type="password" placeholder="Password *" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full border border-gray-300 rounded-lg p-3" required />
-          <button type="submit" disabled={loading} className="w-full bg-primary text-white py-3 rounded-full hover:bg-blue-600 font-semibold">
+          <input
+            type="email"
+            placeholder="Email *"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-white focus:outline-none focus:border-red-500"
+            required
+          />
+          <input
+            type="password"
+            placeholder="Password *"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-white focus:outline-none focus:border-red-500"
+            required
+          />
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-red-500 text-white py-3 rounded-full font-semibold hover:bg-red-600 transition disabled:opacity-50"
+          >
             {loading ? 'Please wait...' : (isLogin ? 'Login' : 'Register')}
           </button>
         </form>
-        <p className="text-center mt-6 text-gray-600">
+        <p className="text-center mt-6 text-gray-500">
           {isLogin ? "Don't have an account? " : "Already have an account? "}
-          <button onClick={() => { setIsLogin(!isLogin); setEmail(''); setPassword(''); setUsername(''); setFullName(''); }} className="text-primary hover:underline">
+          <button
+            onClick={() => { setIsLogin(!isLogin); setEmail(''); setPassword(''); setUsername(''); setFullName(''); }}
+            className="text-red-500 hover:underline"
+          >
             {isLogin ? 'Sign Up' : 'Login'}
           </button>
         </p>
@@ -227,47 +264,136 @@ function LoginPage({ setIsAuthenticated, setUser }) {
   );
 }
 
-// CommentSection (unchanged, but ensure it uses API_URL)
+// PostCard component (dark theme)
+function PostCard({ post, onLike, onDelete, onEdit, currentUser }) {
+  const [isLiking, setIsLiking] = useState(false);
+  const [showComments, setShowComments] = useState(false);
+  const [likesCount, setLikesCount] = useState(post.likes_count || 0);
+  const [showMenu, setShowMenu] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+
+  const formatDate = (date) => {
+    if (!date) return 'Just now';
+    const d = new Date(date);
+    const now = new Date();
+    const diff = (now - d) / 1000;
+    if (diff < 60) return `${Math.floor(diff)}s`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+    return d.toLocaleDateString();
+  };
+
+  return (
+    <>
+      <div className="bg-gray-900 rounded-xl border border-gray-800 p-4 relative">
+        <div className="flex space-x-3">
+          <Link href={`/profile/${post.user?.id}`}>
+            <div className="w-12 h-12 bg-red-600 rounded-full flex items-center justify-center text-white font-bold text-lg cursor-pointer">
+              {post.user?.username?.charAt(0).toUpperCase()}
+            </div>
+          </Link>
+          <div className="flex-1">
+            <div className="flex justify-between items-start">
+              <div className="flex items-center gap-x-2 flex-wrap">
+                <Link href={`/profile/${post.user?.id}`} className="font-semibold text-white hover:text-red-500">
+                  {post.user?.full_name || post.user?.username}
+                </Link>
+                <Link href={`/profile/${post.user?.id}`} className="text-sm text-gray-500">
+                  @{post.user?.username}
+                </Link>
+                <span className="text-xs text-gray-600">{formatDate(post.created_at)}</span>
+              </div>
+              {(currentUser?.id === post.user_id || currentUser?.role === 'admin') && (
+                <div className="relative">
+                  <button onClick={() => setShowMenu(!showMenu)} className="text-gray-500 hover:text-white">⋮</button>
+                  {showMenu && (
+                    <div className="absolute right-0 mt-2 w-32 bg-gray-800 border border-gray-700 shadow-lg rounded-md z-10">
+                      <button onClick={() => { setShowEditModal(true); setShowMenu(false); }} className="block w-full text-left px-4 py-2 text-sm text-white hover:bg-gray-700">Edit</button>
+                      <button onClick={() => { onDelete(post.id); setShowMenu(false); }} className="block w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-gray-700">Delete</button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <p className="mt-2 text-gray-200 whitespace-pre-wrap">{post.content}</p>
+            {post.media_urls && post.media_urls.length > 0 && (
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {post.media_urls.map((url, idx) => (
+                  <img key={idx} src={url} alt="media" className="rounded-lg w-full h-48 object-cover" />
+                ))}
+              </div>
+            )}
+            <div className="flex items-center space-x-6 mt-3">
+              <button onClick={() => { setIsLiking(true); onLike(post.id); setLikesCount(l => l + 1); setIsLiking(false); }} disabled={isLiking} className="flex items-center space-x-1 text-gray-500 hover:text-red-500 transition">
+                <span className="text-xl">❤️</span>
+                <span>{likesCount}</span>
+              </button>
+              <button onClick={() => setShowComments(!showComments)} className="flex items-center space-x-1 text-gray-500 hover:text-secondary transition">
+                <span className="text-xl">💬</span>
+                <span>{post.comments_count || 0}</span>
+              </button>
+            </div>
+            {showComments && <CommentSection postId={post.id} currentUser={currentUser} />}
+          </div>
+        </div>
+      </div>
+      <EditPostModal post={post} isOpen={showEditModal} onClose={() => setShowEditModal(false)} onUpdate={onEdit} />
+    </>
+  );
+}
+
+// CommentSection (dark theme)
 function CommentSection({ postId, currentUser }) {
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState('');
   const [loading, setLoading] = useState(false);
+
   useEffect(() => { fetchComments(); }, [postId]);
+
   const fetchComments = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const res = await axios.get(`${API_URL}/posts/${postId}/comments`, { headers: { Authorization: `Bearer ${token}` } });
+      const res = await axios.get(`${API_URL}/posts/${postId}/comments`);
       setComments(res.data.comments || []);
     } catch (error) { console.error(error); }
   };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!newComment.trim()) return;
     setLoading(true);
     try {
-      const token = localStorage.getItem('token');
-      await axios.post(`${API_URL}/posts/${postId}/comments`, { content: newComment.trim() }, { headers: { Authorization: `Bearer ${token}` } });
+      await axios.post(`${API_URL}/posts/${postId}/comments`, { content: newComment.trim() });
       toast.success('Comment added');
       setNewComment('');
       fetchComments();
     } catch (error) { toast.error('Failed to comment'); }
     finally { setLoading(false); }
   };
+
   return (
-    <div className="mt-4 pt-4 border-t">
-      <h4 className="font-semibold mb-2">Comments ({comments.length})</h4>
+    <div className="mt-4 pt-4 border-t border-gray-800">
+      <h4 className="font-semibold text-white mb-2">Comments ({comments.length})</h4>
       <form onSubmit={handleSubmit} className="mb-4">
-        <textarea value={newComment} onChange={(e) => setNewComment(e.target.value)} placeholder="Write a comment..." rows="2" className="w-full border rounded-lg p-2" maxLength="500" />
-        <button type="submit" disabled={loading} className="mt-2 bg-primary text-white px-4 py-1 rounded-full text-sm">Post</button>
+        <textarea
+          value={newComment}
+          onChange={(e) => setNewComment(e.target.value)}
+          placeholder="Write a comment..."
+          rows="2"
+          className="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-white focus:outline-none focus:border-red-500"
+          maxLength="500"
+        />
+        <button type="submit" disabled={loading} className="mt-2 bg-red-500 text-white px-4 py-1 rounded-full text-sm font-semibold hover:bg-red-600">
+          {loading ? '...' : 'Post'}
+        </button>
       </form>
       <div className="space-y-2">
         {comments.map(c => (
-          <div key={c.id} className="bg-gray-50 p-2 rounded">
+          <div key={c.id} className="bg-gray-800 p-3 rounded-lg">
             <div className="flex items-center gap-2">
-              <span className="font-semibold text-sm">{c.user?.full_name || c.user?.username}</span>
+              <span className="font-semibold text-white text-sm">{c.user?.full_name || c.user?.username}</span>
               <span className="text-xs text-gray-500">@{c.user?.username}</span>
             </div>
-            <p className="text-sm mt-1">{c.content}</p>
+            <p className="text-sm text-gray-300 mt-1">{c.content}</p>
           </div>
         ))}
       </div>
@@ -275,7 +401,7 @@ function CommentSection({ postId, currentUser }) {
   );
 }
 
-// ============ UPDATED EDIT POST MODAL (supports image removal) ============
+// EditPostModal (dark theme)
 function EditPostModal({ post, isOpen, onClose, onUpdate }) {
   const [content, setContent] = useState(post?.content || '');
   const [images, setImages] = useState(post?.media_urls?.map(url => ({ url, public_id: url.split('/').pop() })) || []);
@@ -293,201 +419,84 @@ function EditPostModal({ post, isOpen, onClose, onUpdate }) {
 
   const handleRemoveImage = async (index, publicId) => {
     try {
-      const token = localStorage.getItem('token');
-      await axios.delete(`${API_URL}/upload/${publicId}`, { headers: { Authorization: `Bearer ${token}` } });
-    } catch (err) {
-      console.error('Cloudinary delete error:', err);
-      // Still remove from UI
-    }
+      await axios.delete(`${API_URL}/upload/${publicId}`);
+    } catch (err) { console.error(err); }
     setImages(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleAddImages = async (e) => {
     const files = Array.from(e.target.files);
-    if (images.length + files.length > 4) {
-      toast.error('Maximum 4 images per post');
-      return;
-    }
+    if (images.length + files.length > 4) { toast.error('Max 4 images'); return; }
     setUploading(true);
     const formData = new FormData();
     files.forEach(f => formData.append('images', f));
     try {
-      const token = localStorage.getItem('token');
       const res = await axios.post(`${API_URL}/upload/multiple`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data', Authorization: `Bearer ${token}` }
+        headers: { 'Content-Type': 'multipart/form-data' }
       });
       setImages(prev => [...prev, ...res.data.images]);
       toast.success('Images added');
-    } catch (err) {
-      toast.error('Upload failed');
-    } finally {
-      setUploading(false);
-    }
+    } catch (err) { toast.error('Upload failed'); }
+    finally { setUploading(false); }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!content.trim() && images.length === 0) {
-      toast.error('Post must have content or images');
-      return;
-    }
+    if (!content.trim() && images.length === 0) { toast.error('Content or images required'); return; }
     setLoading(true);
     try {
-      const token = localStorage.getItem('token');
       const media_urls = images.map(img => img.url);
-      const response = await axios.put(`${API_URL}/posts/${post.id}`,
-        { content: content.trim(), media_urls },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      const res = await axios.put(`${API_URL}/posts/${post.id}`, { content: content.trim(), media_urls });
       toast.success('Post updated');
-      onUpdate(response.data.post);
+      onUpdate(res.data.post);
       onClose();
-    } catch (error) {
-      toast.error('Update failed');
-    } finally {
-      setLoading(false);
-    }
+    } catch (error) { toast.error('Update failed'); }
+    finally { setLoading(false); }
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg w-full max-w-md p-4 max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50">
+      <div className="bg-gray-900 rounded-xl w-full max-w-md p-4 border border-gray-800 max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-semibold">Edit Post</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-700">✕</button>
+          <h2 className="text-xl font-semibold text-white">Edit Post</h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-white text-2xl">✕</button>
         </div>
         <form onSubmit={handleSubmit}>
           <textarea
             value={content}
             onChange={(e) => setContent(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:border-primary resize-none"
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-white focus:outline-none focus:border-red-500 resize-none"
             rows="4"
             maxLength="280"
             placeholder="What's on your mind?"
-            autoFocus
           />
           <div className="text-xs text-gray-500 text-right mt-1">{content.length}/280</div>
 
-          {/* Image previews with remove button */}
           {images.length > 0 && (
             <div className="flex flex-wrap gap-2 mt-3">
               {images.map((img, idx) => (
                 <div key={idx} className="relative">
-                  <img src={img.url} alt="preview" className="w-20 h-20 object-cover rounded" />
-                  <button
-                    type="button"
-                    onClick={() => handleRemoveImage(idx, img.public_id)}
-                    className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs"
-                  >
-                    ×
-                  </button>
+                  <img src={img.url} className="w-20 h-20 object-cover rounded" alt="preview" />
+                  <button type="button" onClick={() => handleRemoveImage(idx, img.public_id)} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 text-xs">×</button>
                 </div>
               ))}
             </div>
           )}
 
-          {/* Add more images */}
           <div className="mt-3">
-            <label className="cursor-pointer bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm inline-block">
+            <label className="cursor-pointer bg-gray-800 hover:bg-gray-700 text-gray-300 px-4 py-2 rounded-full text-sm inline-block transition">
               📷 Add Images
-              <input
-                type="file"
-                multiple
-                accept="image/*"
-                onChange={handleAddImages}
-                disabled={uploading || images.length >= 4}
-                className="hidden"
-              />
+              <input type="file" multiple accept="image/*" onChange={handleAddImages} disabled={uploading || images.length >= 4} className="hidden" />
             </label>
             {uploading && <span className="ml-2 text-sm text-gray-500">Uploading...</span>}
           </div>
 
           <div className="flex justify-end space-x-3 mt-4">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-gray-700 hover:text-gray-900">
-              Cancel
-            </button>
-            <button type="submit" disabled={loading} className="bg-primary text-white px-6 py-2 rounded-full hover:bg-blue-600 disabled:opacity-50">
-              {loading ? 'Saving...' : 'Save Changes'}
-            </button>
+            <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white">Cancel</button>
+            <button type="submit" disabled={loading} className="bg-red-500 text-white px-6 py-2 rounded-full font-semibold hover:bg-red-600 disabled:opacity-50">Save</button>
           </div>
         </form>
       </div>
     </div>
-  );
-}
-
-// PostCard component (unchanged apart from using the EditPostModal)
-function PostCard({ post, onLike, onDelete, onEdit, currentUser }) {
-  const [isLiking, setIsLiking] = useState(false);
-  const [showComments, setShowComments] = useState(false);
-  const [likesCount, setLikesCount] = useState(post.likes_count || 0);
-  const [showMenu, setShowMenu] = useState(false);
-  const [showEditModal, setShowEditModal] = useState(false);
-
-  const formatDate = (date) => {
-    if (!date) return 'Just now';
-    const d = new Date(date);
-    const now = new Date();
-    const diff = (now - d) / 1000;
-    if (diff < 60) return `${Math.floor(diff)} seconds ago`;
-    if (diff < 3600) return `${Math.floor(diff / 60)} minutes ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)} hours ago`;
-    return d.toLocaleDateString();
-  };
-
-  return (
-    <>
-      <div className="bg-white rounded-lg shadow p-4 relative">
-        <div className="flex space-x-3">
-          <Link href={`/profile/${post.user?.id}`}>
-            <div className="w-12 h-12 bg-primary rounded-full flex items-center justify-center text-white font-bold text-lg cursor-pointer">
-              {post.user?.username?.charAt(0).toUpperCase()}
-            </div>
-          </Link>
-          <div className="flex-1">
-            <div className="flex justify-between">
-              <div className="flex items-center gap-x-2">
-                <Link href={`/profile/${post.user?.id}`} className="font-semibold hover:text-primary">
-                  {post.user?.full_name || post.user?.username}
-                </Link>
-                <Link href={`/profile/${post.user?.id}`} className="text-sm text-gray-500">
-                  @{post.user?.username}
-                </Link>
-                <span className="text-xs text-gray-400">{formatDate(post.created_at)}</span>
-              </div>
-              {(currentUser?.id === post.user_id || currentUser?.role === 'admin') && (
-                <div className="relative">
-                  <button onClick={() => setShowMenu(!showMenu)} className="text-gray-500">⋮</button>
-                  {showMenu && (
-                    <div className="absolute right-0 mt-2 w-32 bg-white shadow-lg rounded-md z-10 border">
-                      <button onClick={() => { setShowEditModal(true); setShowMenu(false); }} className="block w-full text-left px-4 py-2 text-sm hover:bg-gray-100">Edit</button>
-                      <button onClick={() => { onDelete(post.id); setShowMenu(false); }} className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100">Delete</button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-            <p className="mt-2 text-gray-800">{post.content}</p>
-            {post.media_urls && post.media_urls.length > 0 && (
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                {post.media_urls.map((url, idx) => (
-                  <img key={idx} src={url} alt="post media" className="rounded-lg w-full h-48 object-cover" />
-                ))}
-              </div>
-            )}
-            <div className="flex items-center space-x-6 mt-3">
-              <button onClick={() => { setIsLiking(true); onLike(post.id); setLikesCount(l => l + 1); setIsLiking(false); }} disabled={isLiking} className="flex items-center space-x-1 text-gray-500 hover:text-red-500">
-                <span className="text-xl">❤️</span> <span>{likesCount}</span>
-              </button>
-              <button onClick={() => setShowComments(!showComments)} className="flex items-center space-x-1 text-gray-500 hover:text-primary">
-                <span className="text-xl">💬</span> <span>{post.comments_count || 0}</span>
-              </button>
-            </div>
-            {showComments && <CommentSection postId={post.id} currentUser={currentUser} />}
-          </div>
-        </div>
-      </div>
-      <EditPostModal post={post} isOpen={showEditModal} onClose={() => setShowEditModal(false)} onUpdate={onEdit} />
-    </>
   );
 }

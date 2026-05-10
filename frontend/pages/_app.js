@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
+import Head from 'next/head';
 import '../styles/globals.css';
 
 function MyApp({ Component, pageProps }) {
@@ -19,18 +20,27 @@ function MyApp({ Component, pageProps }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <div className="text-gray-500">Loading...</div>
-        </div>
+      <div className="min-h-screen flex items-center justify-center bg-black">
+        <div className="text-red-500 text-xl animate-pulse">Aureon</div>
       </div>
     );
   }
 
   return (
     <>
-      <Toaster position="top-right" />
+      <Head>
+        <title>Aureon – Connect, share, discover</title>
+        <meta name="description" content="A modern social platform" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <link rel="icon" href="/favicon.ico" />
+      </Head>
+      <Toaster 
+        position="top-right" 
+        toastOptions={{ 
+          style: { background: '#1A1A1A', color: '#fff', border: '1px solid #333' },
+          success: { iconTheme: { primary: '#FF3B30', secondary: '#fff' } }
+        }} 
+      />
       <Component 
         {...pageProps} 
         isAuthenticated={isAuthenticated}
