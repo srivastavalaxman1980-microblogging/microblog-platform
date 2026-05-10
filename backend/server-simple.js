@@ -5,7 +5,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const { sequelize, User, Post, Comment, Follower, Notification } = require('./models');
+const { sequelize, User, Post, Comment, Follower, Notification, Hashtag, PostHashtag } = require('./models');
 const { upload, uploadToCloudinary, deleteFromCloudinary } = require('./middleware/upload');
 
 const app = express();
@@ -54,11 +54,10 @@ const io = socketIo(server, {
   }
 });
 
-const userSockets = new Map(); // userId -> socketId
+const userSockets = new Map();
 
 io.on('connection', (socket) => {
   console.log('🔌 New client connected:', socket.id);
-  
   socket.on('authenticate', (token) => {
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
@@ -69,7 +68,6 @@ io.on('connection', (socket) => {
       console.error('Socket auth error:', err);
     }
   });
-  
   socket.on('disconnect', () => {
     if (socket.userId) {
       userSockets.delete(socket.userId);
@@ -78,12 +76,9 @@ io.on('connection', (socket) => {
   });
 });
 
-// Helper: send real-time notification
 const sendNotification = async (userId, notification) => {
   const socketId = userSockets.get(userId);
-  if (socketId) {
-    io.to(socketId).emit('notification', notification);
-  }
+  if (socketId) io.to(socketId).emit('notification', notification);
   await Notification.create({
     user_id: userId,
     type: notification.type,
@@ -115,18 +110,16 @@ console.log('========================\n');
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString(), port: PORT });
 });
-
 app.get('/', (req, res) => {
   res.json({
-    message: 'MicroBlog API is running',
+    message: 'Aureon API',
     version: '2.0.0',
-    status: 'active',
     endpoints: {
       health: 'GET /health',
       auth: 'POST /api/auth/register, POST /api/auth/login',
       posts: 'GET /api/posts/feed, POST /api/posts, PUT /api/posts/:id, DELETE /api/posts/:id',
-      upload: 'POST /api/upload, POST /api/upload/multiple, DELETE /api/upload/:publicId',
-      notifications: 'GET /api/notifications, PUT /api/notifications/:id/read'
+      hashtags: 'GET /api/hashtags/trending, GET /api/hashtags/:tag/posts',
+      upload: 'POST /api/upload, POST /api/upload/multiple, DELETE /api/upload/:publicId'
     }
   });
 });
@@ -145,30 +138,19 @@ const auth = async (req, res, next) => {
     req.user = user;
     next();
   } catch (error) {
-    console.error('Auth error:', error);
     res.status(401).json({ error: 'Invalid token' });
   }
 };
 
-app.get('/api/test', (req, res) => {
-  res.json({ message: 'API is working!' });
-});
 // ============ AUTHENTICATION ============
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { username, email, password, full_name } = req.body;
-    if (!username || !email || !password) {
-      return res.status(400).json({ error: 'Username, email and password are required' });
-    }
-    const existingUser = await User.findOne({ 
-      where: { [require('sequelize').Op.or]: [{ username }, { email }] } 
-    });
-    if (existingUser) return res.status(400).json({ error: 'Username or email already exists' });
-    
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const user = await User.create({
-      username, email, password_hash: hashedPassword, full_name: full_name || username
-    });
+    if (!username || !email || !password) return res.status(400).json({ error: 'Missing fields' });
+    const existing = await User.findOne({ where: { [require('sequelize').Op.or]: [{ username }, { email }] } });
+    if (existing) return res.status(400).json({ error: 'Username or email exists' });
+    const hashed = await bcrypt.hash(password, 10);
+    const user = await User.create({ username, email, password_hash: hashed, full_name: full_name || username });
     const token = jwt.sign({ id: user.id, username: user.username }, process.env.JWT_SECRET || 'secret', { expiresIn: '7d' });
     res.json({ token, user: { id: user.id, username: user.username, email: user.email, full_name: user.full_name, role: user.role } });
   } catch (error) {
@@ -180,7 +162,7 @@ app.post('/api/auth/register', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
     const user = await User.findOne({ where: { email } });
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
     const valid = await bcrypt.compare(password, user.password_hash);
@@ -189,41 +171,26 @@ app.post('/api/auth/login', async (req, res) => {
     const token = jwt.sign({ id: user.id, username: user.username }, process.env.JWT_SECRET || 'secret', { expiresIn: '7d' });
     res.json({ token, user: { id: user.id, username: user.username, email: user.email, full_name: user.full_name, role: user.role } });
   } catch (error) {
-    console.error('Login error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ============ USER PROFILE ROUTES ============
+// ============ USER PROFILE ROUTES (simplified) ============
 app.get('/api/users/:identifier', auth, async (req, res) => {
   try {
     const { identifier } = req.params;
     const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identifier);
-    let user;
-    if (isUUID) {
-      user = await User.findByPk(identifier, { attributes: { exclude: ['password_hash'] } });
-    } else {
-      user = await User.findOne({ where: { username: identifier }, attributes: { exclude: ['password_hash'] } });
-    }
+    const user = isUUID ? await User.findByPk(identifier, { attributes: { exclude: ['password_hash'] } }) : await User.findOne({ where: { username: identifier }, attributes: { exclude: ['password_hash'] } });
     if (!user) return res.status(404).json({ error: 'User not found' });
     const postCount = await Post.count({ where: { user_id: user.id, is_deleted: false } });
     let isFollowing = false;
     if (req.user.id !== user.id) {
-      const followExists = await Follower.findOne({ where: { follower_id: req.user.id, following_id: user.id, status: 'accepted' } });
-      isFollowing = !!followExists;
+      const follow = await Follower.findOne({ where: { follower_id: req.user.id, following_id: user.id, status: 'accepted' } });
+      isFollowing = !!follow;
     }
-    const recentPosts = await Post.findAll({
-      where: { user_id: user.id, is_deleted: false },
-      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
-      order: [['created_at', 'DESC']],
-      limit: 10
-    });
-    res.json({
-      user: { ...user.toJSON(), post_count: postCount, followers_count: user.followers_count || 0, following_count: user.following_count || 0 },
-      isFollowing, recentPosts
-    });
+    const recentPosts = await Post.findAll({ where: { user_id: user.id, is_deleted: false }, include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }], order: [['created_at', 'DESC']], limit: 10 });
+    res.json({ user: { ...user.toJSON(), post_count: postCount, followers_count: user.followers_count || 0, following_count: user.following_count || 0 }, isFollowing, recentPosts });
   } catch (error) {
-    console.error('Get profile error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -233,10 +200,9 @@ app.put('/api/users/profile', auth, async (req, res) => {
     const { full_name, bio, location, website, avatar_url, cover_photo_url } = req.body;
     const user = await User.findByPk(req.user.id);
     await user.update({ full_name, bio, location, website, avatar_url, cover_photo_url });
-    const updatedUser = await User.findByPk(req.user.id, { attributes: { exclude: ['password_hash'] } });
-    res.json({ message: 'Profile updated', user: updatedUser });
+    const updated = await User.findByPk(req.user.id, { attributes: { exclude: ['password_hash'] } });
+    res.json({ message: 'Profile updated', user: updated });
   } catch (error) {
-    console.error('Update profile error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -245,21 +211,16 @@ app.post('/api/users/:userId/follow', auth, async (req, res) => {
   try {
     const { userId } = req.params;
     if (userId === req.user.id) return res.status(400).json({ error: 'Cannot follow yourself' });
-    const targetUser = await User.findByPk(userId);
-    if (!targetUser) return res.status(404).json({ error: 'User not found' });
+    const target = await User.findByPk(userId);
+    if (!target) return res.status(404).json({ error: 'User not found' });
     const existing = await Follower.findOne({ where: { follower_id: req.user.id, following_id: userId } });
     if (existing && existing.status === 'accepted') return res.status(400).json({ error: 'Already following' });
     await Follower.upsert({ follower_id: req.user.id, following_id: userId, status: 'accepted' });
-    await targetUser.increment('followers_count');
+    await target.increment('followers_count');
     await User.increment('following_count', { where: { id: req.user.id } });
-    await sendNotification(userId, {
-      type: 'follow', actor_id: req.user.id,
-      content: `${req.user.username} started following you`,
-      actor_name: req.user.full_name || req.user.username
-    });
+    await sendNotification(userId, { type: 'follow', actor_id: req.user.id, content: `${req.user.username} started following you` });
     res.json({ message: 'Now following', isFollowing: true });
   } catch (error) {
-    console.error('Follow error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -274,47 +235,31 @@ app.delete('/api/users/:userId/follow', auth, async (req, res) => {
     await User.decrement('following_count', { where: { id: req.user.id } });
     res.json({ message: 'Unfollowed', isFollowing: false });
   } catch (error) {
-    console.error('Unfollow error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
 app.get('/api/users/:userId/followers', auth, async (req, res) => {
-  try {
-    const followers = await Follower.findAll({
-      where: { following_id: req.params.userId, status: 'accepted' },
-      include: [{ model: User, as: 'follower', attributes: ['id', 'username', 'full_name', 'avatar_url'] }]
-    });
-    res.json(followers.map(f => f.follower));
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+  const followers = await Follower.findAll({ where: { following_id: req.params.userId, status: 'accepted' }, include: [{ model: User, as: 'follower', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] });
+  res.json(followers.map(f => f.follower));
 });
 
 app.get('/api/users/:userId/following', auth, async (req, res) => {
-  try {
-    const following = await Follower.findAll({
-      where: { follower_id: req.params.userId, status: 'accepted' },
-      include: [{ model: User, as: 'following', attributes: ['id', 'username', 'full_name', 'avatar_url'] }]
-    });
-    res.json(following.map(f => f.following));
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+  const following = await Follower.findAll({ where: { follower_id: req.params.userId, status: 'accepted' }, include: [{ model: User, as: 'following', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] });
+  res.json(following.map(f => f.following));
 });
 
-// ============ POST ROUTES ============
+// ============ POST ROUTES WITH HASHTAGS ============
 app.get('/api/posts/feed', auth, async (req, res) => {
   try {
     const posts = await Post.findAll({
       where: { is_deleted: false },
-      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url', 'role'] }],
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
       order: [['created_at', 'DESC']],
       limit: 50
     });
     res.json({ posts, count: posts.length });
   } catch (error) {
-    console.error('Feed error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -332,36 +277,43 @@ app.post('/api/posts', auth, async (req, res) => {
       media_urls,
       likes_count: 0, comments_count: 0, shares_count: 0
     });
+    // Extract and create hashtags
+    const hashtagRegex = /#(\w+)/g;
+    const matches = content.match(hashtagRegex);
+    if (matches) {
+      const tagNames = matches.map(t => t.substring(1).toLowerCase());
+      for (const tagName of tagNames) {
+        let hashtag = await Hashtag.findOne({ where: { tag: tagName } });
+        if (!hashtag) hashtag = await Hashtag.create({ tag: tagName });
+        await post.addHashtag(hashtag);
+        await hashtag.increment('post_count');
+      }
+    }
     await req.user.increment('posts_count');
     const postWithUser = await Post.findByPk(post.id, {
-      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url', 'role'] }]
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }]
     });
     res.status(201).json(postWithUser);
   } catch (error) {
-    console.error('Post creation error:', error);
+    console.error('Post error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ============ UPDATED EDIT POST (supports media_urls) ============
 app.put('/api/posts/:id', auth, async (req, res) => {
   try {
     const { content, media_urls } = req.body;
     const post = await Post.findByPk(req.params.id);
     if (!post) return res.status(404).json({ error: 'Post not found' });
-    if (post.user_id !== req.user.id && req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized' });
-    }
+    if (post.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
     const updateData = { updated_at: new Date() };
     if (content !== undefined) updateData.content = content.trim();
     if (media_urls !== undefined) updateData.media_urls = media_urls;
     await post.update(updateData);
-    const updatedPost = await Post.findByPk(post.id, {
-      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }]
-    });
-    res.json({ message: 'Post updated', post: updatedPost });
+    // Note: Re-processing hashtags on edit is more complex; we skip for simplicity.
+    const updated = await Post.findByPk(post.id, { include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] });
+    res.json({ message: 'Post updated', post: updated });
   } catch (error) {
-    console.error('Edit post error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -375,7 +327,6 @@ app.delete('/api/posts/:id', auth, async (req, res) => {
     await req.user.decrement('posts_count');
     res.json({ message: 'Post deleted' });
   } catch (error) {
-    console.error('Delete post error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -385,175 +336,137 @@ app.post('/api/posts/:id/like', auth, async (req, res) => {
     const post = await Post.findByPk(req.params.id);
     if (!post) return res.status(404).json({ error: 'Post not found' });
     await post.increment('likes_count');
-    const updatedPost = await Post.findByPk(req.params.id);
+    const updated = await Post.findByPk(post.id);
     if (post.user_id !== req.user.id) {
-      await sendNotification(post.user_id, {
-        type: 'like', actor_id: req.user.id, post_id: post.id,
-        content: `${req.user.username} liked your post`,
-        actor_name: req.user.full_name || req.user.username
-      });
+      await sendNotification(post.user_id, { type: 'like', actor_id: req.user.id, post_id: post.id, content: `${req.user.username} liked your post` });
     }
-    res.json({ liked: true, likes_count: updatedPost.likes_count });
+    res.json({ liked: true, likes_count: updated.likes_count });
   } catch (error) {
-    console.error('Like error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
 // ============ COMMENT ROUTES ============
 app.get('/api/posts/:postId/comments', auth, async (req, res) => {
-  try {
-    const comments = await Comment.findAll({
-      where: { post_id: req.params.postId, is_deleted: false, parent_comment_id: null },
-      include: [
-        { model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] },
-        { model: Comment, as: 'replies', where: { is_deleted: false }, required: false, include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] }
-      ],
-      order: [['created_at', 'DESC']]
-    });
-    res.json({ comments });
-  } catch (error) {
-    console.error('Get comments error:', error);
-    res.status(500).json({ error: error.message });
-  }
+  const comments = await Comment.findAll({
+    where: { post_id: req.params.postId, is_deleted: false, parent_comment_id: null },
+    include: [
+      { model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] },
+      { model: Comment, as: 'replies', where: { is_deleted: false }, required: false, include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] }
+    ],
+    order: [['created_at', 'DESC']]
+  });
+  res.json({ comments });
 });
 
 app.post('/api/posts/:postId/comments', auth, async (req, res) => {
   try {
     const { postId } = req.params;
     const { content, parent_comment_id } = req.body;
-    if (!content || content.trim() === '') return res.status(400).json({ error: 'Comment content is required' });
+    if (!content || content.trim() === '') return res.status(400).json({ error: 'Comment required' });
     const post = await Post.findByPk(postId);
     if (!post) return res.status(404).json({ error: 'Post not found' });
-    const comment = await Comment.create({
-      user_id: req.user.id, post_id: postId, content: content.trim(), parent_comment_id: parent_comment_id || null
-    });
+    const comment = await Comment.create({ user_id: req.user.id, post_id: postId, content: content.trim(), parent_comment_id: parent_comment_id || null });
     await post.increment('comments_count');
     if (post.user_id !== req.user.id) {
-      await sendNotification(post.user_id, {
-        type: 'comment', actor_id: req.user.id, post_id: post.id, comment_id: comment.id,
-        content: `${req.user.username} commented on your post`,
-        actor_name: req.user.full_name || req.user.username
-      });
+      await sendNotification(post.user_id, { type: 'comment', actor_id: req.user.id, post_id: post.id, comment_id: comment.id, content: `${req.user.username} commented on your post` });
     }
-    const commentWithUser = await Comment.findByPk(comment.id, {
-      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }]
-    });
-    res.status(201).json(commentWithUser);
+    const withUser = await Comment.findByPk(comment.id, { include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] });
+    res.status(201).json(withUser);
   } catch (error) {
-    console.error('Create comment error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
 app.delete('/api/comments/:commentId', auth, async (req, res) => {
+  const comment = await Comment.findByPk(req.params.commentId, { include: [{ model: Post, as: 'post' }] });
+  if (!comment) return res.status(404).json({ error: 'Comment not found' });
+  if (comment.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
+  await comment.update({ is_deleted: true, deleted_at: new Date() });
+  if (comment.post) await comment.post.decrement('comments_count');
+  res.json({ message: 'Comment deleted' });
+});
+
+// ============ HASHTAG ROUTES ============
+app.get('/api/hashtags/trending', async (req, res) => {
   try {
-    const comment = await Comment.findByPk(req.params.commentId, { include: [{ model: Post, as: 'post' }] });
-    if (!comment) return res.status(404).json({ error: 'Comment not found' });
-    if (comment.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
-    await comment.update({ is_deleted: true, deleted_at: new Date() });
-    if (comment.post) await comment.post.decrement('comments_count');
-    res.json({ message: 'Comment deleted' });
+    const trending = await Hashtag.findAll({
+      attributes: ['tag', 'post_count'],
+      order: [['post_count', 'DESC']],
+      limit: 10
+    });
+    res.json(trending);
   } catch (error) {
-    console.error('Delete comment error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ============ IMAGE UPLOAD ROUTES ============
+app.get('/api/hashtags/:tag/posts', async (req, res) => {
+  try {
+    const { tag } = req.params;
+    const hashtag = await Hashtag.findOne({ where: { tag: tag.toLowerCase() } });
+    if (!hashtag) return res.json({ posts: [], count: 0, tag });
+    const posts = await hashtag.getPosts({
+      where: { is_deleted: false },
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+      order: [['created_at', 'DESC']],
+      limit: 50
+    });
+    res.json({ posts, count: posts.length, tag: hashtag.tag });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ IMAGE UPLOAD ============
 app.post('/api/upload', auth, upload.single('image'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No image file provided' });
+  if (!req.file) return res.status(400).json({ error: 'No file' });
   const result = await uploadToCloudinary(req.file.buffer);
   res.json({ success: true, url: result.secure_url, public_id: result.public_id });
 });
 
 app.post('/api/upload/multiple', auth, upload.array('images', 4), async (req, res) => {
-  if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No image files provided' });
-  const uploadPromises = req.files.map(file => uploadToCloudinary(file.buffer));
-  const results = await Promise.all(uploadPromises);
+  if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No files' });
+  const results = await Promise.all(req.files.map(f => uploadToCloudinary(f.buffer)));
   res.json({ success: true, images: results.map(r => ({ url: r.secure_url, public_id: r.public_id })) });
 });
 
 app.delete('/api/upload/:publicId', auth, async (req, res) => {
   await deleteFromCloudinary(req.params.publicId);
-  res.json({ success: true, message: 'Image deleted' });
+  res.json({ success: true });
 });
 
-// ============ NOTIFICATION ROUTES ============
-/*app.get('/api/notifications', auth, async (req, res) => {
-  const notifications = await Notification.findAll({
-    where: { user_id: req.user.id },
-    order: [['created_at', 'DESC']],
-    limit: 50
-  });
-  res.json(notifications);
-});
-
-app.put('/api/notifications/:id/read', auth, async (req, res) => {
-  const notification = await Notification.findOne({ where: { id: req.params.id, user_id: req.user.id } });
-  if (!notification) return res.status(404).json({ error: 'Notification not found' });
-  await notification.update({ is_read: true, read_at: new Date() });
-  res.json({ message: 'Marked as read' });
-});
-
-app.put('/api/notifications/read-all', auth, async (req, res) => {
-  await Notification.update({ is_read: true, read_at: new Date() }, { where: { user_id: req.user.id, is_read: false } });
-  res.json({ message: 'All marked as read' });
-});*/
-
-// ============ TEMPORARY SEED ENDPOINT ============
-app.get('/api/seed-demo-users', async (req, res) => {
+// ============ TEMPORARY DATABASE SYNC ENDPOINT ============
+app.get('/api/sync-db', async (req, res) => {
   try {
-    const bcrypt = require('bcryptjs');
-    const { v4: uuidv4 } = require('uuid');
-
-    const userCount = await User.count();
-    if (userCount > 0) {
-      return res.json({ message: 'Users already exist. No seeding needed.' });
-    }
-
-    await User.bulkCreate([
-      {
-        id: uuidv4(),
-        username: 'john_doe',
-        email: 'john@example.com',
-        password_hash: await bcrypt.hash('John123!', 10),
-        full_name: 'John Doe',
-        bio: 'Software developer',
-        role: 'user'
-      },
-      {
-        id: uuidv4(),
-        username: 'jane_smith',
-        email: 'jane@example.com',
-        password_hash: await bcrypt.hash('Jane123!', 10),
-        full_name: 'Jane Smith',
-        bio: 'Digital marketer',
-        role: 'user'
-      },
-      {
-        id: uuidv4(),
-        username: 'admin',
-        email: 'admin@microblog.com',
-        password_hash: await bcrypt.hash('Admin123!', 10),
-        full_name: 'Admin User',
-        bio: 'Platform administrator',
-        role: 'admin',
-        verified: true
-      }
-    ]);
-
-    res.json({ message: '✅ Seeded 3 demo users.' });
+    await sequelize.sync({ alter: true });
+    res.json({ message: '✅ Database synced successfully!' });
   } catch (error) {
-    console.error('Seed error:', error);
+    console.error('Sync error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ============ 404 & ERROR HANDLERS ============
-app.use((req, res) => {
-  res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });
+// ============ NOTIFICATION ROUTES (simplified) ============
+app.get('/api/notifications', auth, async (req, res) => {
+  const notifs = await Notification.findAll({ where: { user_id: req.user.id }, order: [['created_at', 'DESC']], limit: 50 });
+  res.json(notifs);
 });
+
+app.put('/api/notifications/:id/read', auth, async (req, res) => {
+  const notif = await Notification.findOne({ where: { id: req.params.id, user_id: req.user.id } });
+  if (!notif) return res.status(404).json({ error: 'Not found' });
+  await notif.update({ is_read: true, read_at: new Date() });
+  res.json({ message: 'Marked read' });
+});
+
+app.put('/api/notifications/read-all', auth, async (req, res) => {
+  await Notification.update({ is_read: true, read_at: new Date() }, { where: { user_id: req.user.id, is_read: false } });
+  res.json({ message: 'All marked read' });
+});
+
+// ============ ERROR HANDLING ============
+app.use((req, res) => res.status(404).json({ error: `Route ${req.method} ${req.url} not found` }));
 app.use((err, req, res, next) => {
   console.error('Global error:', err);
   res.status(500).json({ error: 'Internal server error' });
@@ -567,62 +480,13 @@ const startServer = async () => {
     await sequelize.sync({ alter: true });
     console.log('✅ Database synced');
     server.listen(PORT, '0.0.0.0', () => {
-      console.log(`\n🚀 Server running on http://0.0.0.0:${PORT}`);
-      console.log(`📝 Health check: http://localhost:${PORT}/health`);
-      console.log(`🔌 WebSocket enabled\n`);
+      console.log(`\n🚀 Server on http://0.0.0.0:${PORT}`);
+      console.log(`📝 Health: http://localhost:${PORT}/health`);
+      console.log(`🔌 WebSocket enabled`);
     });
-  } catch (error) {
-    console.error('❌ Failed to start server:', error.message);
+  } catch (err) {
+    console.error('❌ Failed:', err.message);
     process.exit(1);
   }
 };
-// TEMPORARY SEED ENDPOINT – REMOVE AFTER SEEDING
-app.get('/api/seed-demo-users', async (req, res) => {
-  try {
-    const bcrypt = require('bcryptjs');
-    const { v4: uuidv4 } = require('uuid');
-
-    const userCount = await User.count();
-    if (userCount > 0) {
-      return res.json({ message: 'Users already exist, skipping seed.' });
-    }
-
-    await User.bulkCreate([
-      {
-        id: uuidv4(),
-        username: 'john_doe',
-        email: 'john@example.com',
-        password_hash: await bcrypt.hash('John123!', 10),
-        full_name: 'John Doe',
-        bio: 'Software developer',
-        role: 'user'
-      },
-      {
-        id: uuidv4(),
-        username: 'jane_smith',
-        email: 'jane@example.com',
-        password_hash: await bcrypt.hash('Jane123!', 10),
-        full_name: 'Jane Smith',
-        bio: 'Digital marketer',
-        role: 'user'
-      },
-      {
-        id: uuidv4(),
-        username: 'admin',
-        email: 'admin@microblog.com',
-        password_hash: await bcrypt.hash('Admin123!', 10),
-        full_name: 'Admin User',
-        bio: 'Platform administrator',
-        role: 'admin',
-        verified: true
-      }
-    ]);
-
-    res.json({ message: '✅ Seeded 3 demo users.' });
-  } catch (error) {
-    console.error('Seed error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
 startServer();

@@ -18,8 +18,8 @@ module.exports = (sequelize) => {
   }, {
     tableName: 'post_hashtags',
     underscored: true,
-    timestamps: true
+    timestamps: true,
+    indexes: [{ unique: true, fields: ['post_id', 'hashtag_id'] }]
   });
-  
   return PostHashtag;
 };

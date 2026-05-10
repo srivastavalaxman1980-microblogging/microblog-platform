@@ -7,33 +7,16 @@ const dbConfig = config[env];
 console.log(`🔧 Initializing database connection in ${env} mode...`);
 
 let sequelize;
-
-// Check if using DATABASE_URL (production) or individual parameters
 if (dbConfig.url) {
   console.log('📡 Connecting via DATABASE_URL');
-  //console.log(`📍 Host: ${dbConfig.url.split('@')[1]?.split('/')[0] || 'hidden'}`);
   sequelize = new Sequelize(dbConfig.url, {
     dialect: 'postgres',
     logging: dbConfig.logging,
-    dialectOptions: dbConfig.dialectOptions || {
-      ssl: {
-        require: true,
-        rejectUnauthorized: false
-      }
-    },
-    pool: {
-      max: 5,
-      min: 0,
-      acquire: 30000,
-      idle: 10000
-    }
+    dialectOptions: dbConfig.dialectOptions,
+    pool: dbConfig.pool
   });
 } else {
   console.log('📡 Connecting via individual parameters');
-  console.log(`📍 Host: ${dbConfig.host}:${dbConfig.port}`);
-  console.log(`🗄️  Database: ${dbConfig.database}`);
-  console.log(`👤 User: ${dbConfig.username}`);
-  
   sequelize = new Sequelize(
     dbConfig.database,
     dbConfig.username,
@@ -44,75 +27,109 @@ if (dbConfig.url) {
       dialect: dbConfig.dialect,
       logging: dbConfig.logging,
       dialectOptions: dbConfig.dialectOptions,
-      pool: {
-        max: 5,
-        min: 0,
-        acquire: 30000,
-        idle: 10000
-      }
+      pool: dbConfig.pool
     }
   );
 }
 
-// Test the connection
-sequelize.authenticate()
-  .then(() => console.log('✅ Database connection established successfully'))
-  .catch(err => {
-    console.error('❌ Database connection failed:', err.message);
-    console.error('💡 Troubleshooting tips:');
-    console.error('   1. Check if DATABASE_URL is set correctly in Render environment');
-    console.error('   2. Verify the database exists and credentials are correct');
-    console.error('   3. Ensure SSL is properly configured for production');
-    if (!dbConfig.url) {
-      console.error('   4. For production, use DATABASE_URL instead of individual parameters');
-    }
-  });
-
-// Import all models
+// Import models
 const User = require('./User')(sequelize);
 const Post = require('./Post')(sequelize);
 const Comment = require('./Comment')(sequelize);
 const Follower = require('./Follower')(sequelize);
+const Message = require('./Message')(sequelize);
+const Group = require('./Group')(sequelize);
+const GroupMember = require('./GroupMember')(sequelize);
+const Ad = require('./Ad')(sequelize);
+const Analytics = require('./Analytics')(sequelize);
+const Report = require('./Report')(sequelize);
+const Hashtag = require('./Hashtag')(sequelize);
+const PostHashtag = require('./PostHashtag')(sequelize);
+const AuditLog = require('./AuditLog')(sequelize);
+const ApiKey = require('./ApiKey')(sequelize);
+const Notification = require('./Notification')(sequelize);
+const Like = require('./Like')(sequelize);
 
-// ============ USER ASSOCIATIONS ============
+// ============ ASSOCIATIONS ============
+
+// User associations
 User.hasMany(Post, { foreignKey: 'user_id', as: 'posts' });
 User.hasMany(Comment, { foreignKey: 'user_id', as: 'comments' });
+User.hasMany(Like, { foreignKey: 'user_id', as: 'likes' });
+User.hasMany(Follower, { as: 'followers', foreignKey: 'following_id' });
+User.hasMany(Follower, { as: 'following', foreignKey: 'follower_id' });
+User.hasMany(Message, { as: 'sent_messages', foreignKey: 'sender_id' });
+User.hasMany(Message, { as: 'received_messages', foreignKey: 'receiver_id' });
+User.hasMany(GroupMember, { as: 'group_memberships', foreignKey: 'user_id' });
+User.hasMany(ApiKey, { as: 'api_keys', foreignKey: 'user_id' });
+User.hasMany(Notification, { as: 'notifications', foreignKey: 'user_id' });
+User.hasMany(Report, { as: 'reports_made', foreignKey: 'reported_by' });
+User.hasMany(Report, { as: 'reports_resolved', foreignKey: 'resolved_by' });
 
-// Follow associations (self-referential many-to-many)
-User.belongsToMany(User, {
-  as: 'followers',
-  through: Follower,
-  foreignKey: 'following_id',
-  otherKey: 'follower_id'
-});
-
-User.belongsToMany(User, {
-  as: 'following',
-  through: Follower,
-  foreignKey: 'follower_id',
-  otherKey: 'following_id'
-});
-
-// Follower associations
-Follower.belongsTo(User, { as: 'follower', foreignKey: 'follower_id' });
-Follower.belongsTo(User, { as: 'following', foreignKey: 'following_id' });
-
-// ============ POST ASSOCIATIONS ============
+// Post associations
 Post.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 Post.hasMany(Comment, { foreignKey: 'post_id', as: 'comments' });
+Post.hasMany(Like, { foreignKey: 'post_id', as: 'likes' });
+Post.belongsToMany(Hashtag, { through: PostHashtag, as: 'hashtags' });
 
-// ============ COMMENT ASSOCIATIONS ============
+// Comment associations
 Comment.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 Comment.belongsTo(Post, { foreignKey: 'post_id', as: 'post' });
 Comment.hasMany(Comment, { foreignKey: 'parent_comment_id', as: 'replies' });
 Comment.belongsTo(Comment, { foreignKey: 'parent_comment_id', as: 'parent' });
 
-// ============ EXPORT MODULES ============
+// Follower associations
+Follower.belongsTo(User, { as: 'follower', foreignKey: 'follower_id' });
+Follower.belongsTo(User, { as: 'following', foreignKey: 'following_id' });
+
+// Message associations
+Message.belongsTo(User, { as: 'sender', foreignKey: 'sender_id' });
+Message.belongsTo(User, { as: 'receiver', foreignKey: 'receiver_id' });
+
+// Group associations
+Group.belongsTo(User, { as: 'owner', foreignKey: 'owner_id' });
+Group.hasMany(GroupMember, { as: 'members', foreignKey: 'group_id' });
+Group.belongsToMany(User, { through: GroupMember, as: 'users' });
+GroupMember.belongsTo(User, { as: 'user', foreignKey: 'user_id' });
+GroupMember.belongsTo(Group, { as: 'group', foreignKey: 'group_id' });
+
+// Hashtag associations
+Hashtag.belongsToMany(Post, { through: PostHashtag, as: 'posts' });
+
+// Like associations
+Like.belongsTo(User, { as: 'user', foreignKey: 'user_id' });
+Like.belongsTo(Post, { as: 'post', foreignKey: 'post_id' });
+
+// ApiKey associations
+ApiKey.belongsTo(User, { as: 'user', foreignKey: 'user_id' });
+
+// Notification associations
+Notification.belongsTo(User, { as: 'user', foreignKey: 'user_id' });
+Notification.belongsTo(User, { as: 'actor', foreignKey: 'actor_id' });
+Notification.belongsTo(Post, { as: 'post', foreignKey: 'post_id' });
+
+// Report associations
+Report.belongsTo(User, { as: 'reporter', foreignKey: 'reported_by' });
+Report.belongsTo(User, { as: 'resolver', foreignKey: 'resolved_by' });
+Report.belongsTo(Post, { as: 'post', foreignKey: 'post_id' });
+
 module.exports = {
   sequelize,
   Sequelize,
   User,
   Post,
   Comment,
-  Follower
+  Follower,
+  Message,
+  Group,
+  GroupMember,
+  Ad,
+  Analytics,
+  Report,
+  Hashtag,
+  PostHashtag,
+  AuditLog,
+  ApiKey,
+  Notification,
+  Like
 };
