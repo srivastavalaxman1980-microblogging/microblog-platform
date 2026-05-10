@@ -4,9 +4,12 @@ import toast from 'react-hot-toast';
 import Link from 'next/link';
 import Navbar from '../components/Navbar';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || process.env.API_URL || 'http://localhost:5000/api';
+// ============ API URL CONFIGURATION ============
+// Use environment variable or fallback to production backend
+const API_URL = process.env.NEXT_PUBLIC_API_URL || process.env.API_URL || 'https://microblog-backend-1jv9.onrender.com/api';
 
-axios.defaults.withCredentials = false;
+console.log('🔗 Frontend API_URL:', API_URL);
+// =============================================
 
 export default function Home({ isAuthenticated, user, setIsAuthenticated, setUser }) {
   const [posts, setPosts] = useState([]);
@@ -24,16 +27,33 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
     setFeedLoading(true);
     try {
       const token = localStorage.getItem('token');
-      if (!token) return;
+      if (!token) {
+        console.log('No token found, skipping feed fetch');
+        return;
+      }
+      
+      console.log('Fetching feed from:', `${API_URL}/posts/feed`);
       
       const response = await axios.get(`${API_URL}/posts/feed`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
       });
       
+      console.log('Feed response:', response.data);
       setPosts(response.data.posts || []);
     } catch (error) {
       console.error('Error fetching feed:', error);
-      toast.error('Failed to load feed');
+      if (error.response) {
+        console.error('Response data:', error.response.data);
+        toast.error(error.response.data?.error || 'Failed to load feed');
+      } else if (error.request) {
+        console.error('No response from server');
+        toast.error('Cannot connect to server. Make sure backend is running.');
+      } else {
+        toast.error('Error loading feed');
+      }
     } finally {
       setFeedLoading(false);
     }
@@ -54,16 +74,37 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
-      await axios.post(`${API_URL}/posts`, 
+      if (!token) {
+        toast.error('Please login first');
+        return;
+      }
+      
+      console.log('Creating post at:', `${API_URL}/posts`);
+      
+      const response = await axios.post(`${API_URL}/posts`, 
         { content: content.trim(), visibility: 'public' },
-        { headers: { 'Authorization': `Bearer ${token}` } }
+        { 
+          headers: { 
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          } 
+        }
       );
       
+      console.log('Post created:', response.data);
       toast.success('Post created successfully!');
       setContent('');
       fetchFeed();
     } catch (error) {
-      toast.error('Failed to create post');
+      console.error('Error creating post:', error);
+      if (error.response) {
+        console.error('Response data:', error.response.data);
+        toast.error(error.response.data?.error || 'Failed to create post');
+      } else if (error.request) {
+        toast.error('No response from server. Make sure backend is running.');
+      } else {
+        toast.error('Error creating post');
+      }
     } finally {
       setLoading(false);
     }
@@ -82,7 +123,10 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
           ? { ...post, likes_count: response.data.likes_count }
           : post
       ));
+      
+      toast.success('Liked!');
     } catch (error) {
+      console.error('Error liking post:', error);
       toast.error('Failed to like post');
     }
   };
@@ -98,6 +142,7 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
       toast.success('Post deleted successfully');
       fetchFeed();
     } catch (error) {
+      console.error('Error deleting post:', error);
       toast.error('Failed to delete post');
     }
   };
@@ -117,7 +162,7 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
   };
 
   if (!isAuthenticated) {
-    return <LoginPage setIsAuthenticated={setIsAuthenticated} setUser={setUser} />;
+    return <LoginPage setIsAuthenticated={setIsAuthenticated} setUser={setUser} API_URL={API_URL} />;
   }
 
   return (
@@ -125,6 +170,7 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
       <Navbar currentUser={user} />
       
       <div className="max-w-2xl mx-auto px-4 py-6">
+        {/* Post composer */}
         <div className="bg-white rounded-lg shadow p-4 mb-6">
           <form onSubmit={handleCreatePost}>
             <textarea
@@ -150,6 +196,7 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
           </form>
         </div>
 
+        {/* Feed */}
         {feedLoading ? (
           <div className="text-center py-12">
             <div className="text-gray-500">Loading posts...</div>
@@ -169,6 +216,7 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
                   onDelete={handleDeletePost}
                   onEdit={handleEditPost}
                   currentUser={user}
+                  API_URL={API_URL}
                 />
               ))
             )}
@@ -179,8 +227,8 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
   );
 }
 
-// Login Page Component
-function LoginPage({ setIsAuthenticated, setUser }) {
+// ============ LOGIN PAGE COMPONENT ============
+function LoginPage({ setIsAuthenticated, setUser, API_URL }) {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -188,14 +236,23 @@ function LoginPage({ setIsAuthenticated, setUser }) {
   const [fullName, setFullName] = useState('');
   const [loading, setLoading] = useState(false);
 
+  console.log('🔐 LoginPage using API_URL:', API_URL);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
 
+    console.log('📡 Attempting login with API_URL:', API_URL);
+    console.log('📧 Email:', email);
+
     try {
       let response;
       if (isLogin) {
-        response = await axios.post(`${API_URL}/auth/login`, { email, password });
+        const loginUrl = `${API_URL}/auth/login`;
+        console.log('📡 POST to:', loginUrl);
+        
+        response = await axios.post(loginUrl, { email, password });
+        console.log('✅ Login response:', response.data);
         toast.success('Login successful!');
       } else {
         if (!username || !email || !password) {
@@ -226,7 +283,18 @@ function LoginPage({ setIsAuthenticated, setUser }) {
       setUser(user);
       toast.success(`Welcome, ${user.full_name || user.username}!`);
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Authentication failed');
+      console.error('❌ Auth error:', error);
+      if (error.response) {
+        console.error('Response data:', error.response.data);
+        console.error('Response status:', error.response.status);
+        toast.error(error.response.data?.error || 'Authentication failed');
+      } else if (error.request) {
+        console.error('No response received from server');
+        toast.error('Cannot connect to server. Please check if backend is running.');
+      } else {
+        console.error('Error message:', error.message);
+        toast.error('An error occurred. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -307,8 +375,8 @@ function LoginPage({ setIsAuthenticated, setUser }) {
   );
 }
 
-// Edit Post Modal Component
-function EditPostModal({ post, isOpen, onClose, onUpdate }) {
+// ============ EDIT POST MODAL COMPONENT ============
+function EditPostModal({ post, isOpen, onClose, onUpdate, API_URL }) {
   const [content, setContent] = useState(post?.content || '');
   const [loading, setLoading] = useState(false);
 
@@ -345,6 +413,7 @@ function EditPostModal({ post, isOpen, onClose, onUpdate }) {
       onUpdate(response.data.post);
       onClose();
     } catch (error) {
+      console.error('Error updating post:', error);
       toast.error(error.response?.data?.error || 'Failed to update post');
     } finally {
       setLoading(false);
@@ -390,8 +459,8 @@ function EditPostModal({ post, isOpen, onClose, onUpdate }) {
   );
 }
 
-// Comment Section Component
-function CommentSection({ postId, isAuthenticated, currentUser }) {
+// ============ COMMENT SECTION COMPONENT ============
+function CommentSection({ postId, isAuthenticated, currentUser, API_URL }) {
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState('');
   const [loading, setLoading] = useState(false);
@@ -435,6 +504,7 @@ function CommentSection({ postId, isAuthenticated, currentUser }) {
       setReplyToId(null);
       fetchComments();
     } catch (error) {
+      console.error('Error posting comment:', error);
       toast.error('Failed to post comment');
     } finally {
       setLoading(false);
@@ -452,6 +522,7 @@ function CommentSection({ postId, isAuthenticated, currentUser }) {
       toast.success('Comment deleted');
       fetchComments();
     } catch (error) {
+      console.error('Error deleting comment:', error);
       toast.error('Failed to delete comment');
     }
   };
@@ -572,8 +643,8 @@ function CommentSection({ postId, isAuthenticated, currentUser }) {
   );
 }
 
-// Post Card Component
-function PostCard({ post, onLike, onDelete, onEdit, currentUser }) {
+// ============ POST CARD COMPONENT ============
+function PostCard({ post, onLike, onDelete, onEdit, currentUser, API_URL }) {
   const [isLiking, setIsLiking] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [likesCount, setLikesCount] = useState(post.likes_count || 0);
@@ -689,13 +760,24 @@ function PostCard({ post, onLike, onDelete, onEdit, currentUser }) {
             </div>
             
             {showComments && (
-              <CommentSection postId={post.id} isAuthenticated={!!currentUser} currentUser={currentUser} />
+              <CommentSection 
+                postId={post.id}
+                isAuthenticated={!!currentUser}
+                currentUser={currentUser}
+                API_URL={API_URL}
+              />
             )}
           </div>
         </div>
       </div>
       
-      <EditPostModal post={post} isOpen={showEditModal} onClose={() => setShowEditModal(false)} onUpdate={onEdit} />
+      <EditPostModal 
+        post={post} 
+        isOpen={showEditModal} 
+        onClose={() => setShowEditModal(false)} 
+        onUpdate={onEdit}
+        API_URL={API_URL}
+      />
     </>
   );
 }
