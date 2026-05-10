@@ -157,7 +157,7 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
   );
 }
 
-// LoginPage component (same as before, omitted for brevity – keep your existing one)
+// LoginPage component (unchanged, keep your existing one)
 function LoginPage({ setIsAuthenticated, setUser }) {
   const API_URL = process.env.NEXT_PUBLIC_API_URL || process.env.API_URL || 'https://microblog-backend-1jv9.onrender.com/api';
   const [isLogin, setIsLogin] = useState(true);
@@ -227,7 +227,196 @@ function LoginPage({ setIsAuthenticated, setUser }) {
   );
 }
 
-// PostCard component (updated to show images)
+// CommentSection (unchanged, but ensure it uses API_URL)
+function CommentSection({ postId, currentUser }) {
+  const [comments, setComments] = useState([]);
+  const [newComment, setNewComment] = useState('');
+  const [loading, setLoading] = useState(false);
+  useEffect(() => { fetchComments(); }, [postId]);
+  const fetchComments = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get(`${API_URL}/posts/${postId}/comments`, { headers: { Authorization: `Bearer ${token}` } });
+      setComments(res.data.comments || []);
+    } catch (error) { console.error(error); }
+  };
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!newComment.trim()) return;
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      await axios.post(`${API_URL}/posts/${postId}/comments`, { content: newComment.trim() }, { headers: { Authorization: `Bearer ${token}` } });
+      toast.success('Comment added');
+      setNewComment('');
+      fetchComments();
+    } catch (error) { toast.error('Failed to comment'); }
+    finally { setLoading(false); }
+  };
+  return (
+    <div className="mt-4 pt-4 border-t">
+      <h4 className="font-semibold mb-2">Comments ({comments.length})</h4>
+      <form onSubmit={handleSubmit} className="mb-4">
+        <textarea value={newComment} onChange={(e) => setNewComment(e.target.value)} placeholder="Write a comment..." rows="2" className="w-full border rounded-lg p-2" maxLength="500" />
+        <button type="submit" disabled={loading} className="mt-2 bg-primary text-white px-4 py-1 rounded-full text-sm">Post</button>
+      </form>
+      <div className="space-y-2">
+        {comments.map(c => (
+          <div key={c.id} className="bg-gray-50 p-2 rounded">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-sm">{c.user?.full_name || c.user?.username}</span>
+              <span className="text-xs text-gray-500">@{c.user?.username}</span>
+            </div>
+            <p className="text-sm mt-1">{c.content}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ============ UPDATED EDIT POST MODAL (supports image removal) ============
+function EditPostModal({ post, isOpen, onClose, onUpdate }) {
+  const [content, setContent] = useState(post?.content || '');
+  const [images, setImages] = useState(post?.media_urls?.map(url => ({ url, public_id: url.split('/').pop() })) || []);
+  const [uploading, setUploading] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (post) {
+      setContent(post.content || '');
+      setImages(post.media_urls?.map(url => ({ url, public_id: url.split('/').pop() })) || []);
+    }
+  }, [post]);
+
+  if (!isOpen) return null;
+
+  const handleRemoveImage = async (index, publicId) => {
+    try {
+      const token = localStorage.getItem('token');
+      await axios.delete(`${API_URL}/upload/${publicId}`, { headers: { Authorization: `Bearer ${token}` } });
+    } catch (err) {
+      console.error('Cloudinary delete error:', err);
+      // Still remove from UI
+    }
+    setImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleAddImages = async (e) => {
+    const files = Array.from(e.target.files);
+    if (images.length + files.length > 4) {
+      toast.error('Maximum 4 images per post');
+      return;
+    }
+    setUploading(true);
+    const formData = new FormData();
+    files.forEach(f => formData.append('images', f));
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.post(`${API_URL}/upload/multiple`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data', Authorization: `Bearer ${token}` }
+      });
+      setImages(prev => [...prev, ...res.data.images]);
+      toast.success('Images added');
+    } catch (err) {
+      toast.error('Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!content.trim() && images.length === 0) {
+      toast.error('Post must have content or images');
+      return;
+    }
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const media_urls = images.map(img => img.url);
+      const response = await axios.put(`${API_URL}/posts/${post.id}`,
+        { content: content.trim(), media_urls },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success('Post updated');
+      onUpdate(response.data.post);
+      onClose();
+    } catch (error) {
+      toast.error('Update failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg w-full max-w-md p-4 max-h-[90vh] overflow-y-auto">
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold">Edit Post</h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-700">✕</button>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:border-primary resize-none"
+            rows="4"
+            maxLength="280"
+            placeholder="What's on your mind?"
+            autoFocus
+          />
+          <div className="text-xs text-gray-500 text-right mt-1">{content.length}/280</div>
+
+          {/* Image previews with remove button */}
+          {images.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-3">
+              {images.map((img, idx) => (
+                <div key={idx} className="relative">
+                  <img src={img.url} alt="preview" className="w-20 h-20 object-cover rounded" />
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveImage(idx, img.public_id)}
+                    className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add more images */}
+          <div className="mt-3">
+            <label className="cursor-pointer bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm inline-block">
+              📷 Add Images
+              <input
+                type="file"
+                multiple
+                accept="image/*"
+                onChange={handleAddImages}
+                disabled={uploading || images.length >= 4}
+                className="hidden"
+              />
+            </label>
+            {uploading && <span className="ml-2 text-sm text-gray-500">Uploading...</span>}
+          </div>
+
+          <div className="flex justify-end space-x-3 mt-4">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-gray-700 hover:text-gray-900">
+              Cancel
+            </button>
+            <button type="submit" disabled={loading} className="bg-primary text-white px-6 py-2 rounded-full hover:bg-blue-600 disabled:opacity-50">
+              {loading ? 'Saving...' : 'Save Changes'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// PostCard component (unchanged apart from using the EditPostModal)
 function PostCard({ post, onLike, onDelete, onEdit, currentUser }) {
   const [isLiking, setIsLiking] = useState(false);
   const [showComments, setShowComments] = useState(false);
@@ -300,83 +489,5 @@ function PostCard({ post, onLike, onDelete, onEdit, currentUser }) {
       </div>
       <EditPostModal post={post} isOpen={showEditModal} onClose={() => setShowEditModal(false)} onUpdate={onEdit} />
     </>
-  );
-}
-
-// CommentSection (simplified – same as before, but ensure it works)
-function CommentSection({ postId, currentUser }) {
-  const [comments, setComments] = useState([]);
-  const [newComment, setNewComment] = useState('');
-  const [loading, setLoading] = useState(false);
-  useEffect(() => { fetchComments(); }, [postId]);
-  const fetchComments = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      const res = await axios.get(`${API_URL}/posts/${postId}/comments`, { headers: { Authorization: `Bearer ${token}` } });
-      setComments(res.data.comments || []);
-    } catch (error) { console.error(error); }
-  };
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!newComment.trim()) return;
-    setLoading(true);
-    try {
-      const token = localStorage.getItem('token');
-      await axios.post(`${API_URL}/posts/${postId}/comments`, { content: newComment.trim() }, { headers: { Authorization: `Bearer ${token}` } });
-      toast.success('Comment added');
-      setNewComment('');
-      fetchComments();
-    } catch (error) { toast.error('Failed to comment'); }
-    finally { setLoading(false); }
-  };
-  return (
-    <div className="mt-4 pt-4 border-t">
-      <h4 className="font-semibold mb-2">Comments ({comments.length})</h4>
-      <form onSubmit={handleSubmit} className="mb-4">
-        <textarea value={newComment} onChange={(e) => setNewComment(e.target.value)} placeholder="Write a comment..." rows="2" className="w-full border rounded-lg p-2" maxLength="500" />
-        <button type="submit" disabled={loading} className="mt-2 bg-primary text-white px-4 py-1 rounded-full text-sm">Post</button>
-      </form>
-      <div className="space-y-2">
-        {comments.map(c => (
-          <div key={c.id} className="bg-gray-50 p-2 rounded">
-            <div className="flex items-center gap-2">
-              <span className="font-semibold text-sm">{c.user?.full_name || c.user?.username}</span>
-              <span className="text-xs text-gray-500">@{c.user?.username}</span>
-            </div>
-            <p className="text-sm mt-1">{c.content}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function EditPostModal({ post, isOpen, onClose, onUpdate }) {
-  const [content, setContent] = useState(post?.content || '');
-  const [loading, setLoading] = useState(false);
-  if (!isOpen) return null;
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!content.trim()) return;
-    setLoading(true);
-    try {
-      const token = localStorage.getItem('token');
-      const res = await axios.put(`${API_URL}/posts/${post.id}`, { content: content.trim() }, { headers: { Authorization: `Bearer ${token}` } });
-      toast.success('Post updated');
-      onUpdate(res.data.post);
-      onClose();
-    } catch (error) { toast.error('Update failed'); }
-    finally { setLoading(false); }
-  };
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg w-full max-w-md p-4">
-        <div className="flex justify-between mb-4"><h2 className="text-xl">Edit Post</h2><button onClick={onClose}>✕</button></div>
-        <form onSubmit={handleSubmit}>
-          <textarea value={content} onChange={(e) => setContent(e.target.value)} rows="4" className="w-full border rounded-lg p-2" maxLength="280" autoFocus />
-          <div className="flex justify-end mt-4"><button type="submit" disabled={loading} className="bg-primary text-white px-4 py-2 rounded-full">Save</button></div>
-        </form>
-      </div>
-    </div>
   );
 }

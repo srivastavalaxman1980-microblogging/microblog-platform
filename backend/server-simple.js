@@ -340,13 +340,19 @@ app.post('/api/posts', auth, async (req, res) => {
   }
 });
 
+// ============ UPDATED EDIT POST (supports media_urls) ============
 app.put('/api/posts/:id', auth, async (req, res) => {
   try {
-    const { content } = req.body;
+    const { content, media_urls } = req.body;
     const post = await Post.findByPk(req.params.id);
     if (!post) return res.status(404).json({ error: 'Post not found' });
-    if (post.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
-    await post.update({ content: content.trim(), updated_at: new Date() });
+    if (post.user_id !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+    const updateData = { updated_at: new Date() };
+    if (content !== undefined) updateData.content = content.trim();
+    if (media_urls !== undefined) updateData.media_urls = media_urls;
+    await post.update(updateData);
     const updatedPost = await Post.findByPk(post.id, {
       include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }]
     });
@@ -453,73 +459,43 @@ app.delete('/api/comments/:commentId', auth, async (req, res) => {
 
 // ============ IMAGE UPLOAD ROUTES ============
 app.post('/api/upload', auth, upload.single('image'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No image file provided' });
-    const result = await uploadToCloudinary(req.file.buffer);
-    res.json({ success: true, url: result.secure_url, public_id: result.public_id });
-  } catch (error) {
-    console.error('Upload error:', error);
-    res.status(500).json({ error: 'Failed to upload image' });
-  }
+  if (!req.file) return res.status(400).json({ error: 'No image file provided' });
+  const result = await uploadToCloudinary(req.file.buffer);
+  res.json({ success: true, url: result.secure_url, public_id: result.public_id });
 });
 
 app.post('/api/upload/multiple', auth, upload.array('images', 4), async (req, res) => {
-  try {
-    if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No image files provided' });
-    const uploadPromises = req.files.map(file => uploadToCloudinary(file.buffer));
-    const results = await Promise.all(uploadPromises);
-    res.json({ success: true, images: results.map(r => ({ url: r.secure_url, public_id: r.public_id })) });
-  } catch (error) {
-    console.error('Multiple upload error:', error);
-    res.status(500).json({ error: 'Failed to upload images' });
-  }
+  if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No image files provided' });
+  const uploadPromises = req.files.map(file => uploadToCloudinary(file.buffer));
+  const results = await Promise.all(uploadPromises);
+  res.json({ success: true, images: results.map(r => ({ url: r.secure_url, public_id: r.public_id })) });
 });
 
 app.delete('/api/upload/:publicId', auth, async (req, res) => {
-  try {
-    await deleteFromCloudinary(req.params.publicId);
-    res.json({ success: true, message: 'Image deleted' });
-  } catch (error) {
-    console.error('Delete error:', error);
-    res.status(500).json({ error: 'Failed to delete image' });
-  }
+  await deleteFromCloudinary(req.params.publicId);
+  res.json({ success: true, message: 'Image deleted' });
 });
 
 // ============ NOTIFICATION ROUTES ============
 app.get('/api/notifications', auth, async (req, res) => {
-  try {
-    const notifications = await Notification.findAll({
-      where: { user_id: req.user.id },
-      order: [['created_at', 'DESC']],
-      limit: 50
-    });
-    res.json(notifications);
-  } catch (error) {
-    console.error('Get notifications error:', error);
-    res.status(500).json({ error: error.message });
-  }
+  const notifications = await Notification.findAll({
+    where: { user_id: req.user.id },
+    order: [['created_at', 'DESC']],
+    limit: 50
+  });
+  res.json(notifications);
 });
 
 app.put('/api/notifications/:id/read', auth, async (req, res) => {
-  try {
-    const notification = await Notification.findOne({ where: { id: req.params.id, user_id: req.user.id } });
-    if (!notification) return res.status(404).json({ error: 'Notification not found' });
-    await notification.update({ is_read: true, read_at: new Date() });
-    res.json({ message: 'Marked as read' });
-  } catch (error) {
-    console.error('Mark read error:', error);
-    res.status(500).json({ error: error.message });
-  }
+  const notification = await Notification.findOne({ where: { id: req.params.id, user_id: req.user.id } });
+  if (!notification) return res.status(404).json({ error: 'Notification not found' });
+  await notification.update({ is_read: true, read_at: new Date() });
+  res.json({ message: 'Marked as read' });
 });
 
 app.put('/api/notifications/read-all', auth, async (req, res) => {
-  try {
-    await Notification.update({ is_read: true, read_at: new Date() }, { where: { user_id: req.user.id, is_read: false } });
-    res.json({ message: 'All marked as read' });
-  } catch (error) {
-    console.error('Mark all read error:', error);
-    res.status(500).json({ error: error.message });
-  }
+  await Notification.update({ is_read: true, read_at: new Date() }, { where: { user_id: req.user.id, is_read: false } });
+  res.json({ message: 'All marked as read' });
 });
 
 // ============ 404 & ERROR HANDLERS ============
