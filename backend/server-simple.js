@@ -52,7 +52,9 @@ app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Health check
+// ============ HEALTH & ROOT ENDPOINTS ============
+
+// Health check (no /api prefix for easy monitoring)
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'OK', 
@@ -67,7 +69,14 @@ app.get('/', (req, res) => {
   res.json({ 
     message: 'MicroBlog API is running',
     version: '1.0.0',
-    status: 'active'
+    status: 'active',
+    endpoints: {
+      health: 'GET /health',
+      auth: 'POST /api/auth/register, POST /api/auth/login',
+      posts: 'GET /api/posts/feed, POST /api/posts, PUT /api/posts/:id, DELETE /api/posts/:id',
+      comments: 'GET /api/posts/:postId/comments, POST /api/posts/:postId/comments',
+      users: 'GET /api/users/:identifier, PUT /api/users/profile, POST /api/users/:userId/follow'
+    }
   });
 });
 
@@ -181,144 +190,6 @@ app.post('/api/auth/login', async (req, res) => {
     });
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============ POST ROUTES ============
-
-app.get('/api/posts/feed', auth, async (req, res) => {
-  try {
-    const posts = await Post.findAll({
-      where: { is_deleted: false },
-      include: [{ 
-        model: User, 
-        as: 'user', 
-        attributes: ['id', 'username', 'full_name', 'avatar_url', 'role'] 
-      }],
-      order: [['created_at', 'DESC']],
-      limit: 50
-    });
-    
-    res.json({ posts, count: posts.length });
-  } catch (error) {
-    console.error('Feed error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/posts', auth, async (req, res) => {
-  try {
-    const { content, visibility = 'public' } = req.body;
-    
-    if (!content || content.trim() === '') {
-      return res.status(400).json({ error: 'Content is required' });
-    }
-    
-    if (content.length > 280) {
-      return res.status(400).json({ error: 'Content cannot exceed 280 characters' });
-    }
-    
-    const now = new Date();
-    const post = await Post.create({
-      user_id: req.user.id,
-      content: content.trim(),
-      visibility: visibility,
-      likes_count: 0,
-      comments_count: 0,
-      shares_count: 0,
-      created_at: now,
-      updated_at: now
-    });
-    
-    await req.user.increment('posts_count');
-    
-    const postWithUser = await Post.findByPk(post.id, {
-      include: [{ 
-        model: User, 
-        as: 'user', 
-        attributes: ['id', 'username', 'full_name', 'avatar_url', 'role'] 
-      }]
-    });
-    
-    res.status(201).json(postWithUser);
-  } catch (error) {
-    console.error('Post creation error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put('/api/posts/:id', auth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { content } = req.body;
-    
-    if (!content || content.trim() === '') {
-      return res.status(400).json({ error: 'Content is required' });
-    }
-    
-    if (content.length > 280) {
-      return res.status(400).json({ error: 'Content cannot exceed 280 characters' });
-    }
-    
-    const post = await Post.findByPk(id);
-    if (!post) {
-      return res.status(404).json({ error: 'Post not found' });
-    }
-    
-    if (post.user_id !== req.user.id && req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized' });
-    }
-    
-    await post.update({ content: content.trim(), updated_at: new Date() });
-    
-    const updatedPost = await Post.findByPk(id, {
-      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url', 'role'] }]
-    });
-    
-    res.json({ message: 'Post updated successfully', post: updatedPost });
-  } catch (error) {
-    console.error('Edit post error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/posts/:id', auth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const post = await Post.findByPk(id);
-    
-    if (!post) {
-      return res.status(404).json({ error: 'Post not found' });
-    }
-    
-    if (post.user_id !== req.user.id && req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized' });
-    }
-    
-    await post.update({ is_deleted: true, deleted_at: new Date() });
-    await req.user.decrement('posts_count');
-    
-    res.json({ message: 'Post deleted successfully' });
-  } catch (error) {
-    console.error('Delete post error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/posts/:id/like', auth, async (req, res) => {
-  try {
-    const post = await Post.findByPk(req.params.id);
-    if (!post) {
-      return res.status(404).json({ error: 'Post not found' });
-    }
-    
-    await post.increment('likes_count');
-    const updatedPost = await Post.findByPk(req.params.id);
-    
-    res.json({ liked: true, likes_count: updatedPost.likes_count });
-  } catch (error) {
-    console.error('Like error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -468,6 +339,144 @@ app.get('/api/users/:userId/following', auth, async (req, res) => {
   }
 });
 
+// ============ POST ROUTES ============
+
+app.get('/api/posts/feed', auth, async (req, res) => {
+  try {
+    const posts = await Post.findAll({
+      where: { is_deleted: false },
+      include: [{ 
+        model: User, 
+        as: 'user', 
+        attributes: ['id', 'username', 'full_name', 'avatar_url', 'role'] 
+      }],
+      order: [['created_at', 'DESC']],
+      limit: 50
+    });
+    
+    res.json({ posts, count: posts.length });
+  } catch (error) {
+    console.error('Feed error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/posts', auth, async (req, res) => {
+  try {
+    const { content, visibility = 'public' } = req.body;
+    
+    if (!content || content.trim() === '') {
+      return res.status(400).json({ error: 'Content is required' });
+    }
+    
+    if (content.length > 280) {
+      return res.status(400).json({ error: 'Content cannot exceed 280 characters' });
+    }
+    
+    const now = new Date();
+    const post = await Post.create({
+      user_id: req.user.id,
+      content: content.trim(),
+      visibility: visibility,
+      likes_count: 0,
+      comments_count: 0,
+      shares_count: 0,
+      created_at: now,
+      updated_at: now
+    });
+    
+    await req.user.increment('posts_count');
+    
+    const postWithUser = await Post.findByPk(post.id, {
+      include: [{ 
+        model: User, 
+        as: 'user', 
+        attributes: ['id', 'username', 'full_name', 'avatar_url', 'role'] 
+      }]
+    });
+    
+    res.status(201).json(postWithUser);
+  } catch (error) {
+    console.error('Post creation error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/posts/:id', auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { content } = req.body;
+    
+    if (!content || content.trim() === '') {
+      return res.status(400).json({ error: 'Content is required' });
+    }
+    
+    if (content.length > 280) {
+      return res.status(400).json({ error: 'Content cannot exceed 280 characters' });
+    }
+    
+    const post = await Post.findByPk(id);
+    if (!post) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+    
+    if (post.user_id !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+    
+    await post.update({ content: content.trim(), updated_at: new Date() });
+    
+    const updatedPost = await Post.findByPk(id, {
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url', 'role'] }]
+    });
+    
+    res.json({ message: 'Post updated successfully', post: updatedPost });
+  } catch (error) {
+    console.error('Edit post error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/posts/:id', auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const post = await Post.findByPk(id);
+    
+    if (!post) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+    
+    if (post.user_id !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+    
+    await post.update({ is_deleted: true, deleted_at: new Date() });
+    await req.user.decrement('posts_count');
+    
+    res.json({ message: 'Post deleted successfully' });
+  } catch (error) {
+    console.error('Delete post error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/posts/:id/like', auth, async (req, res) => {
+  try {
+    const post = await Post.findByPk(req.params.id);
+    if (!post) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+    
+    await post.increment('likes_count');
+    const updatedPost = await Post.findByPk(req.params.id);
+    
+    res.json({ liked: true, likes_count: updatedPost.likes_count });
+  } catch (error) {
+    console.error('Like error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============ COMMENT ROUTES ============
 
 app.get('/api/posts/:postId/comments', auth, async (req, res) => {
@@ -548,25 +557,26 @@ app.delete('/api/comments/:commentId', auth, async (req, res) => {
   }
 });
 
-// 404 handler
+// ============ 404 HANDLER ============
+
 app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });
 });
 
-// Error handler
+// ============ ERROR HANDLER ============
+
 app.use((err, req, res, next) => {
   console.error('Global error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Start server
+// ============ START SERVER ============
+
 const startServer = async () => {
   try {
-    // Test database connection
     await sequelize.authenticate();
     console.log('✅ Database connected successfully');
     
-    // Sync database (creates tables if they don't exist)
     await sequelize.sync({ alter: true });
     console.log('✅ Database synced');
     
@@ -577,7 +587,6 @@ const startServer = async () => {
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error.message);
-    console.error('Please check your DATABASE_URL environment variable');
     process.exit(1);
   }
 };
