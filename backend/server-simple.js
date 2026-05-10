@@ -8,7 +8,23 @@ const jwt = require('jsonwebtoken');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// CORS configuration for production
+// Debug: Log environment (without exposing full password)
+console.log('=== ENVIRONMENT CHECK ===');
+console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('PORT:', PORT);
+console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
+if (process.env.DATABASE_URL) {
+  const urlParts = process.env.DATABASE_URL.match(/postgresql:\/\/([^:]+):([^@]+)@([^/]+)\/(.+)/);
+  if (urlParts) {
+    console.log('DB Host:', urlParts[3]);
+    console.log('DB Name:', urlParts[4]);
+    console.log('DB User:', urlParts[1]);
+  }
+}
+console.log('JWT_SECRET exists:', !!process.env.JWT_SECRET);
+console.log('========================');
+
+// CORS configuration
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3001',
@@ -22,35 +38,27 @@ app.use(cors({
   origin: function(origin, callback) {
     if (!origin) return callback(null, true);
     if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-      return callback(new Error(msg), false);
+      console.log('CORS blocked origin:', origin);
+      return callback(null, false);
     }
     return callback(null, true);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Request logging in production
-if (process.env.NODE_ENV === 'production') {
-  app.use((req, res, next) => {
-    console.log(`${req.method} ${req.url} - ${new Date().toISOString()}`);
-    next();
-  });
-}
-
-// Health check endpoint
+// Health check
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(), 
     port: PORT,
-    environment: process.env.NODE_ENV || 'development'
+    database_connected: !!sequelize
   });
 });
 
@@ -59,14 +67,7 @@ app.get('/', (req, res) => {
   res.json({ 
     message: 'MicroBlog API is running',
     version: '1.0.0',
-    status: 'active',
-    endpoints: {
-      health: 'GET /health',
-      auth: 'POST /api/auth/register, POST /api/auth/login',
-      posts: 'GET /api/posts/feed, POST /api/posts, PUT /api/posts/:id, DELETE /api/posts/:id',
-      comments: 'GET /api/posts/:postId/comments, POST /api/posts/:postId/comments',
-      users: 'GET /api/users/:identifier, PUT /api/users/profile, POST /api/users/:userId/follow'
-    }
+    status: 'active'
   });
 });
 
@@ -133,14 +134,7 @@ app.post('/api/auth/register', async (req, res) => {
         username: user.username, 
         email: user.email, 
         full_name: user.full_name,
-        role: user.role,
-        bio: user.bio,
-        location: user.location,
-        website: user.website,
-        avatar_url: user.avatar_url,
-        cover_photo_url: user.cover_photo_url,
-        followers_count: user.followers_count,
-        following_count: user.following_count
+        role: user.role
       } 
     });
   } catch (error) {
@@ -167,7 +161,6 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
-    // Update last login
     await user.update({ last_login_at: new Date() });
     
     const token = jwt.sign(
@@ -183,14 +176,7 @@ app.post('/api/auth/login', async (req, res) => {
         username: user.username, 
         email: user.email, 
         full_name: user.full_name,
-        role: user.role,
-        bio: user.bio,
-        location: user.location,
-        website: user.website,
-        avatar_url: user.avatar_url,
-        cover_photo_url: user.cover_photo_url,
-        followers_count: user.followers_count,
-        following_count: user.following_count
+        role: user.role
       } 
     });
   } catch (error) {
@@ -255,7 +241,6 @@ app.post('/api/posts', auth, async (req, res) => {
       }]
     });
     
-    console.log(`Post created by ${req.user.username}: ${post.id}`);
     res.status(201).json(postWithUser);
   } catch (error) {
     console.error('Post creation error:', error);
@@ -277,29 +262,20 @@ app.put('/api/posts/:id', auth, async (req, res) => {
     }
     
     const post = await Post.findByPk(id);
-    
     if (!post) {
       return res.status(404).json({ error: 'Post not found' });
     }
     
     if (post.user_id !== req.user.id && req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized to edit this post' });
+      return res.status(403).json({ error: 'Unauthorized' });
     }
     
-    await post.update({
-      content: content.trim(),
-      updated_at: new Date()
-    });
+    await post.update({ content: content.trim(), updated_at: new Date() });
     
     const updatedPost = await Post.findByPk(id, {
-      include: [{ 
-        model: User, 
-        as: 'user', 
-        attributes: ['id', 'username', 'full_name', 'avatar_url', 'role'] 
-      }]
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url', 'role'] }]
     });
     
-    console.log(`Post ${id} edited by ${req.user.username}`);
     res.json({ message: 'Post updated successfully', post: updatedPost });
   } catch (error) {
     console.error('Edit post error:', error);
@@ -310,7 +286,6 @@ app.put('/api/posts/:id', auth, async (req, res) => {
 app.delete('/api/posts/:id', auth, async (req, res) => {
   try {
     const { id } = req.params;
-    
     const post = await Post.findByPk(id);
     
     if (!post) {
@@ -318,17 +293,12 @@ app.delete('/api/posts/:id', auth, async (req, res) => {
     }
     
     if (post.user_id !== req.user.id && req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized to delete this post' });
+      return res.status(403).json({ error: 'Unauthorized' });
     }
     
-    await post.update({
-      is_deleted: true,
-      deleted_at: new Date()
-    });
-    
+    await post.update({ is_deleted: true, deleted_at: new Date() });
     await req.user.decrement('posts_count');
     
-    console.log(`Post ${id} deleted by ${req.user.username}`);
     res.json({ message: 'Post deleted successfully' });
   } catch (error) {
     console.error('Delete post error:', error);
@@ -358,60 +328,37 @@ app.post('/api/posts/:id/like', auth, async (req, res) => {
 app.get('/api/users/:identifier', auth, async (req, res) => {
   try {
     const { identifier } = req.params;
-    
     const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identifier);
     
     let user;
     if (isUUID) {
-      user = await User.findByPk(identifier, {
-        attributes: { exclude: ['password_hash'] }
-      });
+      user = await User.findByPk(identifier, { attributes: { exclude: ['password_hash'] } });
     } else {
-      user = await User.findOne({
-        where: { username: identifier },
-        attributes: { exclude: ['password_hash'] }
-      });
+      user = await User.findOne({ where: { username: identifier }, attributes: { exclude: ['password_hash'] } });
     }
     
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
     
-    const postCount = await Post.count({ 
-      where: { user_id: user.id, is_deleted: false } 
-    });
+    const postCount = await Post.count({ where: { user_id: user.id, is_deleted: false } });
     
     let isFollowing = false;
     if (req.user.id !== user.id) {
       const followExists = await Follower.findOne({
-        where: {
-          follower_id: req.user.id,
-          following_id: user.id,
-          status: 'accepted'
-        }
+        where: { follower_id: req.user.id, following_id: user.id, status: 'accepted' }
       });
       isFollowing = !!followExists;
     }
     
     const recentPosts = await Post.findAll({
       where: { user_id: user.id, is_deleted: false },
-      include: [{ 
-        model: User, 
-        as: 'user', 
-        attributes: ['id', 'username', 'full_name', 'avatar_url'] 
-      }],
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
       order: [['created_at', 'DESC']],
       limit: 10
     });
     
-    res.json({
-      user: {
-        ...user.toJSON(),
-        post_count: postCount
-      },
-      isFollowing,
-      recentPosts
-    });
+    res.json({ user: { ...user.toJSON(), post_count: postCount }, isFollowing, recentPosts });
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({ error: error.message });
@@ -421,7 +368,6 @@ app.get('/api/users/:identifier', auth, async (req, res) => {
 app.put('/api/users/profile', auth, async (req, res) => {
   try {
     const { full_name, bio, location, website, avatar_url, cover_photo_url } = req.body;
-    
     const user = await User.findByPk(req.user.id);
     
     await user.update({
@@ -433,10 +379,7 @@ app.put('/api/users/profile', auth, async (req, res) => {
       cover_photo_url: cover_photo_url || user.cover_photo_url
     });
     
-    const updatedUser = await User.findByPk(req.user.id, {
-      attributes: { exclude: ['password_hash'] }
-    });
-    
+    const updatedUser = await User.findByPk(req.user.id, { attributes: { exclude: ['password_hash'] } });
     res.json({ message: 'Profile updated successfully', user: updatedUser });
   } catch (error) {
     console.error('Update profile error:', error);
@@ -447,7 +390,6 @@ app.put('/api/users/profile', auth, async (req, res) => {
 app.post('/api/users/:userId/follow', auth, async (req, res) => {
   try {
     const { userId } = req.params;
-    
     if (userId === req.user.id) {
       return res.status(400).json({ error: 'Cannot follow yourself' });
     }
@@ -458,22 +400,14 @@ app.post('/api/users/:userId/follow', auth, async (req, res) => {
     }
     
     const existingFollow = await Follower.findOne({
-      where: {
-        follower_id: req.user.id,
-        following_id: userId
-      }
+      where: { follower_id: req.user.id, following_id: userId }
     });
     
     if (existingFollow && existingFollow.status === 'accepted') {
       return res.status(400).json({ error: 'Already following this user' });
     }
     
-    await Follower.upsert({
-      follower_id: req.user.id,
-      following_id: userId,
-      status: 'accepted'
-    });
-    
+    await Follower.upsert({ follower_id: req.user.id, following_id: userId, status: 'accepted' });
     await targetUser.increment('followers_count');
     await User.increment('following_count', { where: { id: req.user.id } });
     
@@ -487,12 +421,8 @@ app.post('/api/users/:userId/follow', auth, async (req, res) => {
 app.delete('/api/users/:userId/follow', auth, async (req, res) => {
   try {
     const { userId } = req.params;
-    
     const follow = await Follower.findOne({
-      where: {
-        follower_id: req.user.id,
-        following_id: userId
-      }
+      where: { follower_id: req.user.id, following_id: userId }
     });
     
     if (!follow) {
@@ -500,7 +430,6 @@ app.delete('/api/users/:userId/follow', auth, async (req, res) => {
     }
     
     await follow.destroy();
-    
     await User.decrement('followers_count', { where: { id: userId } });
     await User.decrement('following_count', { where: { id: req.user.id } });
     
@@ -514,16 +443,10 @@ app.delete('/api/users/:userId/follow', auth, async (req, res) => {
 app.get('/api/users/:userId/followers', auth, async (req, res) => {
   try {
     const { userId } = req.params;
-    
     const followers = await Follower.findAll({
       where: { following_id: userId, status: 'accepted' },
-      include: [{ 
-        model: User, 
-        as: 'follower', 
-        attributes: ['id', 'username', 'full_name', 'avatar_url', 'bio'] 
-      }]
+      include: [{ model: User, as: 'follower', attributes: ['id', 'username', 'full_name', 'avatar_url', 'bio'] }]
     });
-    
     res.json(followers.map(f => f.follower));
   } catch (error) {
     console.error('Get followers error:', error);
@@ -534,16 +457,10 @@ app.get('/api/users/:userId/followers', auth, async (req, res) => {
 app.get('/api/users/:userId/following', auth, async (req, res) => {
   try {
     const { userId } = req.params;
-    
     const following = await Follower.findAll({
       where: { follower_id: userId, status: 'accepted' },
-      include: [{ 
-        model: User, 
-        as: 'following', 
-        attributes: ['id', 'username', 'full_name', 'avatar_url', 'bio'] 
-      }]
+      include: [{ model: User, as: 'following', attributes: ['id', 'username', 'full_name', 'avatar_url', 'bio'] }]
     });
-    
     res.json(following.map(f => f.following));
   } catch (error) {
     console.error('Get following error:', error);
@@ -556,22 +473,14 @@ app.get('/api/users/:userId/following', auth, async (req, res) => {
 app.get('/api/posts/:postId/comments', auth, async (req, res) => {
   try {
     const { postId } = req.params;
-    
     const comments = await Comment.findAll({
       where: { post_id: postId, is_deleted: false, parent_comment_id: null },
       include: [
         { model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] },
-        { 
-          model: Comment, 
-          as: 'replies', 
-          where: { is_deleted: false }, 
-          required: false, 
-          include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }]
-        }
+        { model: Comment, as: 'replies', where: { is_deleted: false }, required: false, include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] }
       ],
       order: [['created_at', 'DESC']]
     });
-    
     res.json({ comments });
   } catch (error) {
     console.error('Get comments error:', error);
@@ -616,7 +525,6 @@ app.post('/api/posts/:postId/comments', auth, async (req, res) => {
 app.delete('/api/comments/:commentId', auth, async (req, res) => {
   try {
     const { commentId } = req.params;
-    
     const comment = await Comment.findByPk(commentId, { include: [{ model: Post, as: 'post' }] });
     
     if (!comment) {
@@ -640,33 +548,36 @@ app.delete('/api/comments/:commentId', auth, async (req, res) => {
   }
 });
 
-// ============ ERROR HANDLING ============
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });
+});
 
+// Error handler
 app.use((err, req, res, next) => {
   console.error('Global error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-app.use((req, res) => {
-  res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });
-});
-
-// ============ START SERVER ============
-
+// Start server
 const startServer = async () => {
   try {
+    // Test database connection
     await sequelize.authenticate();
     console.log('✅ Database connected successfully');
-    console.log(`📊 Database: ${process.env.DB_NAME || 'microblogging_dev'}`);
     
-    app.listen(PORT, () => {
-      console.log(`\n🚀 Server running on http://localhost:${PORT}`);
+    // Sync database (creates tables if they don't exist)
+    await sequelize.sync({ alter: true });
+    console.log('✅ Database synced');
+    
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`\n🚀 Server running on http://0.0.0.0:${PORT}`);
       console.log(`📝 Health check: http://localhost:${PORT}/health`);
-      console.log(`🔗 API base: http://localhost:${PORT}/api`);
       console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}\n`);
     });
   } catch (error) {
-    console.error('❌ Failed to start server:', error);
+    console.error('❌ Failed to start server:', error.message);
+    console.error('Please check your DATABASE_URL environment variable');
     process.exit(1);
   }
 };
