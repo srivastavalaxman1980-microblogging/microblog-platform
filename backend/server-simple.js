@@ -5,14 +5,24 @@ const http = require('http');
 const socketIo = require('socket.io');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const { sequelize, User, Post, Comment, Follower, Notification, Hashtag, PostHashtag } = require('./models');
+const { Op } = require('sequelize');
+const {
+  sequelize,
+  User,
+  Post,
+  Comment,
+  Follower,
+  Notification,
+  Hashtag,
+  Like,
+} = require('./models');
 const { upload, uploadToCloudinary, deleteFromCloudinary } = require('./middleware/upload');
 
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
 
-// ============ CORS CONFIGURATION ============
+// ============ CORS ============
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3001',
@@ -21,39 +31,39 @@ const allowedOrigins = [
   'http://127.0.0.1:3000',
   'https://microblog-frontend.onrender.com',
   'https://microblog-frontend-k7mj.onrender.com',
-  process.env.FRONTEND_URL
+  process.env.FRONTEND_URL,
 ].filter(Boolean);
 
 console.log('🚫 CORS Allowed Origins:');
-allowedOrigins.forEach(origin => console.log(`   - ${origin}`));
+allowedOrigins.forEach((origin) => console.log(`   - ${origin}`));
 
-app.use(cors({
-  origin: function(origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) === -1) {
-      console.log('❌ CORS blocked:', origin);
-      return callback(new Error('CORS blocked'), false);
-    }
-    console.log('✅ CORS allowed:', origin);
-    return callback(null, true);
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
-}));
-
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.indexOf(origin) === -1) {
+        console.log('❌ CORS blocked:', origin);
+        return callback(new Error('CORS blocked'), false);
+      }
+      console.log('✅ CORS allowed:', origin);
+      return callback(null, true);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  })
+);
 app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ============ SOCKET.IO ============
+// ============ SOCKET.IO (real‑time) ============
 const io = socketIo(server, {
   cors: {
     origin: allowedOrigins,
-    credentials: true
-  }
+    credentials: true,
+  },
 });
-
 const userSockets = new Map();
 
 io.on('connection', (socket) => {
@@ -85,7 +95,7 @@ const sendNotification = async (userId, notification) => {
     actor_id: notification.actor_id,
     post_id: notification.post_id,
     comment_id: notification.comment_id,
-    content: notification.content
+    content: notification.content,
   });
 };
 
@@ -95,7 +105,9 @@ console.log('NODE_ENV:', process.env.NODE_ENV);
 console.log('PORT:', PORT);
 console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
 if (process.env.DATABASE_URL) {
-  const urlParts = process.env.DATABASE_URL.match(/postgresql:\/\/([^:]+):([^@]+)@([^/]+)\/(.+)/);
+  const urlParts = process.env.DATABASE_URL.match(
+    /postgresql:\/\/([^:]+):([^@]+)@([^/]+)\/(.+)/
+  );
   if (urlParts) {
     console.log('DB Host:', urlParts[3]);
     console.log('DB Name:', urlParts[4]);
@@ -106,7 +118,7 @@ console.log('JWT_SECRET exists:', !!process.env.JWT_SECRET);
 console.log('Cloudinary configured:', !!process.env.CLOUDINARY_CLOUD_NAME);
 console.log('========================\n');
 
-// ============ HEALTH & ROOT ============
+// ============ SIMPLE TEST ROUTES ============
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString(), port: PORT });
 });
@@ -118,9 +130,10 @@ app.get('/', (req, res) => {
       health: 'GET /health',
       auth: 'POST /api/auth/register, POST /api/auth/login',
       posts: 'GET /api/posts/feed, POST /api/posts, PUT /api/posts/:id, DELETE /api/posts/:id',
+      share: 'POST /api/posts/:id/share',
       hashtags: 'GET /api/hashtags/trending, GET /api/hashtags/:tag/posts',
-      upload: 'POST /api/upload, POST /api/upload/multiple, DELETE /api/upload/:publicId'
-    }
+      upload: 'POST /api/upload, POST /api/upload/multiple, DELETE /api/upload/:publicId',
+    },
   });
 });
 
@@ -146,13 +159,34 @@ const auth = async (req, res, next) => {
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { username, email, password, full_name } = req.body;
-    if (!username || !email || !password) return res.status(400).json({ error: 'Missing fields' });
-    const existing = await User.findOne({ where: { [require('sequelize').Op.or]: [{ username }, { email }] } });
+    if (!username || !email || !password)
+      return res.status(400).json({ error: 'Missing fields' });
+    const existing = await User.findOne({
+      where: { [Op.or]: [{ username }, { email }] },
+    });
     if (existing) return res.status(400).json({ error: 'Username or email exists' });
     const hashed = await bcrypt.hash(password, 10);
-    const user = await User.create({ username, email, password_hash: hashed, full_name: full_name || username });
-    const token = jwt.sign({ id: user.id, username: user.username }, process.env.JWT_SECRET || 'secret', { expiresIn: '7d' });
-    res.json({ token, user: { id: user.id, username: user.username, email: user.email, full_name: user.full_name, role: user.role } });
+    const user = await User.create({
+      username,
+      email,
+      password_hash: hashed,
+      full_name: full_name || username,
+    });
+    const token = jwt.sign(
+      { id: user.id, username: user.username },
+      process.env.JWT_SECRET || 'secret',
+      { expiresIn: '7d' }
+    );
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        full_name: user.full_name,
+        role: user.role,
+      },
+    });
   } catch (error) {
     console.error('Register error:', error);
     res.status(500).json({ error: error.message });
@@ -162,34 +196,68 @@ app.post('/api/auth/register', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+    if (!email || !password)
+      return res.status(400).json({ error: 'Email and password required' });
     const user = await User.findOne({ where: { email } });
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
     await user.update({ last_login_at: new Date() });
-    const token = jwt.sign({ id: user.id, username: user.username }, process.env.JWT_SECRET || 'secret', { expiresIn: '7d' });
-    res.json({ token, user: { id: user.id, username: user.username, email: user.email, full_name: user.full_name, role: user.role } });
+    const token = jwt.sign(
+      { id: user.id, username: user.username },
+      process.env.JWT_SECRET || 'secret',
+      { expiresIn: '7d' }
+    );
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        full_name: user.full_name,
+        role: user.role,
+      },
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// ============ USER PROFILE ROUTES (simplified) ============
+// ============ USER PROFILE & FOLLOW ============
 app.get('/api/users/:identifier', auth, async (req, res) => {
   try {
     const { identifier } = req.params;
-    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identifier);
-    const user = isUUID ? await User.findByPk(identifier, { attributes: { exclude: ['password_hash'] } }) : await User.findOne({ where: { username: identifier }, attributes: { exclude: ['password_hash'] } });
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      identifier
+    );
+    const user = isUUID
+      ? await User.findByPk(identifier, { attributes: { exclude: ['password_hash'] } })
+      : await User.findOne({ where: { username: identifier }, attributes: { exclude: ['password_hash'] } });
     if (!user) return res.status(404).json({ error: 'User not found' });
     const postCount = await Post.count({ where: { user_id: user.id, is_deleted: false } });
     let isFollowing = false;
     if (req.user.id !== user.id) {
-      const follow = await Follower.findOne({ where: { follower_id: req.user.id, following_id: user.id, status: 'accepted' } });
+      const follow = await Follower.findOne({
+        where: { follower_id: req.user.id, following_id: user.id, status: 'accepted' },
+      });
       isFollowing = !!follow;
     }
-    const recentPosts = await Post.findAll({ where: { user_id: user.id, is_deleted: false }, include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }], order: [['created_at', 'DESC']], limit: 10 });
-    res.json({ user: { ...user.toJSON(), post_count: postCount, followers_count: user.followers_count || 0, following_count: user.following_count || 0 }, isFollowing, recentPosts });
+    const recentPosts = await Post.findAll({
+      where: { user_id: user.id, is_deleted: false },
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+      order: [['created_at', 'DESC']],
+      limit: 10,
+    });
+    res.json({
+      user: {
+        ...user.toJSON(),
+        post_count: postCount,
+        followers_count: user.followers_count || 0,
+        following_count: user.following_count || 0,
+      },
+      isFollowing,
+      recentPosts,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -213,12 +281,19 @@ app.post('/api/users/:userId/follow', auth, async (req, res) => {
     if (userId === req.user.id) return res.status(400).json({ error: 'Cannot follow yourself' });
     const target = await User.findByPk(userId);
     if (!target) return res.status(404).json({ error: 'User not found' });
-    const existing = await Follower.findOne({ where: { follower_id: req.user.id, following_id: userId } });
-    if (existing && existing.status === 'accepted') return res.status(400).json({ error: 'Already following' });
+    const existing = await Follower.findOne({
+      where: { follower_id: req.user.id, following_id: userId },
+    });
+    if (existing && existing.status === 'accepted')
+      return res.status(400).json({ error: 'Already following' });
     await Follower.upsert({ follower_id: req.user.id, following_id: userId, status: 'accepted' });
     await target.increment('followers_count');
     await User.increment('following_count', { where: { id: req.user.id } });
-    await sendNotification(userId, { type: 'follow', actor_id: req.user.id, content: `${req.user.username} started following you` });
+    await sendNotification(userId, {
+      type: 'follow',
+      actor_id: req.user.id,
+      content: `${req.user.username} started following you`,
+    });
     res.json({ message: 'Now following', isFollowing: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -228,7 +303,9 @@ app.post('/api/users/:userId/follow', auth, async (req, res) => {
 app.delete('/api/users/:userId/follow', auth, async (req, res) => {
   try {
     const { userId } = req.params;
-    const follow = await Follower.findOne({ where: { follower_id: req.user.id, following_id: userId } });
+    const follow = await Follower.findOne({
+      where: { follower_id: req.user.id, following_id: userId },
+    });
     if (!follow) return res.status(400).json({ error: 'Not following' });
     await follow.destroy();
     await User.decrement('followers_count', { where: { id: userId } });
@@ -240,23 +317,36 @@ app.delete('/api/users/:userId/follow', auth, async (req, res) => {
 });
 
 app.get('/api/users/:userId/followers', auth, async (req, res) => {
-  const followers = await Follower.findAll({ where: { following_id: req.params.userId, status: 'accepted' }, include: [{ model: User, as: 'follower', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] });
-  res.json(followers.map(f => f.follower));
+  const followers = await Follower.findAll({
+    where: { following_id: req.params.userId, status: 'accepted' },
+    include: [{ model: User, as: 'follower', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+  });
+  res.json(followers.map((f) => f.follower));
 });
 
 app.get('/api/users/:userId/following', auth, async (req, res) => {
-  const following = await Follower.findAll({ where: { follower_id: req.params.userId, status: 'accepted' }, include: [{ model: User, as: 'following', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] });
-  res.json(following.map(f => f.following));
+  const following = await Follower.findAll({
+    where: { follower_id: req.params.userId, status: 'accepted' },
+    include: [{ model: User, as: 'following', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+  });
+  res.json(following.map((f) => f.following));
 });
 
-// ============ POST ROUTES WITH HASHTAGS ============
+// ============ POSTS & SHARES ============
 app.get('/api/posts/feed', auth, async (req, res) => {
   try {
     const posts = await Post.findAll({
       where: { is_deleted: false },
-      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+      include: [
+        { model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] },
+        {
+          model: Post,
+          as: 'original',
+          include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+        },
+      ],
       order: [['created_at', 'DESC']],
-      limit: 50
+      limit: 50,
     });
     res.json({ posts, count: posts.length });
   } catch (error) {
@@ -275,13 +365,16 @@ app.post('/api/posts', auth, async (req, res) => {
       content: content.trim(),
       visibility,
       media_urls,
-      likes_count: 0, comments_count: 0, shares_count: 0
+      likes_count: 0,
+      comments_count: 0,
+      shares_count: 0,
     });
-    // Extract and create hashtags
+
+    // extract hashtags
     const hashtagRegex = /#(\w+)/g;
     const matches = content.match(hashtagRegex);
     if (matches) {
-      const tagNames = matches.map(t => t.substring(1).toLowerCase());
+      const tagNames = matches.map((t) => t.substring(1).toLowerCase());
       for (const tagName of tagNames) {
         let hashtag = await Hashtag.findOne({ where: { tag: tagName } });
         if (!hashtag) hashtag = await Hashtag.create({ tag: tagName });
@@ -289,13 +382,65 @@ app.post('/api/posts', auth, async (req, res) => {
         await hashtag.increment('post_count');
       }
     }
+
     await req.user.increment('posts_count');
     const postWithUser = await Post.findByPk(post.id, {
-      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }]
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
     });
     res.status(201).json(postWithUser);
   } catch (error) {
     console.error('Post error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// SHARE (retweet / quote)
+app.post('/api/posts/:id/share', auth, async (req, res) => {
+  try {
+    const originalPost = await Post.findByPk(req.params.id);
+    if (!originalPost) return res.status(404).json({ error: 'Post not found' });
+    if (originalPost.is_deleted) return res.status(400).json({ error: 'Cannot share a deleted post' });
+
+    const { comment } = req.body;
+    if (comment && comment.length > 280) {
+      return res.status(400).json({ error: 'Share comment too long (max 280 chars)' });
+    }
+
+    const sharePost = await Post.create({
+      user_id: req.user.id,
+      content: comment || '',
+      shared_from: originalPost.id,
+      share_comment: comment || null,
+      visibility: 'public',
+      media_urls: [],
+    });
+
+    await originalPost.increment('shares_count');
+    await req.user.increment('posts_count');
+
+    const shareWithDetails = await Post.findByPk(sharePost.id, {
+      include: [
+        { model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] },
+        {
+          model: Post,
+          as: 'original',
+          include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+        },
+      ],
+    });
+
+    if (originalPost.user_id !== req.user.id) {
+      await sendNotification(originalPost.user_id, {
+        type: 'share',
+        actor_id: req.user.id,
+        post_id: originalPost.id,
+        content: `${req.user.username} shared your post`,
+      });
+    }
+
+    res.status(201).json(shareWithDetails);
+  } catch (error) {
+    console.error('Share error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -305,13 +450,15 @@ app.put('/api/posts/:id', auth, async (req, res) => {
     const { content, media_urls } = req.body;
     const post = await Post.findByPk(req.params.id);
     if (!post) return res.status(404).json({ error: 'Post not found' });
-    if (post.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
+    if (post.user_id !== req.user.id && req.user.role !== 'admin')
+      return res.status(403).json({ error: 'Unauthorized' });
     const updateData = { updated_at: new Date() };
     if (content !== undefined) updateData.content = content.trim();
     if (media_urls !== undefined) updateData.media_urls = media_urls;
     await post.update(updateData);
-    // Note: Re-processing hashtags on edit is more complex; we skip for simplicity.
-    const updated = await Post.findByPk(post.id, { include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] });
+    const updated = await Post.findByPk(post.id, {
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+    });
     res.json({ message: 'Post updated', post: updated });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -322,7 +469,8 @@ app.delete('/api/posts/:id', auth, async (req, res) => {
   try {
     const post = await Post.findByPk(req.params.id);
     if (!post) return res.status(404).json({ error: 'Post not found' });
-    if (post.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
+    if (post.user_id !== req.user.id && req.user.role !== 'admin')
+      return res.status(403).json({ error: 'Unauthorized' });
     await post.update({ is_deleted: true, deleted_at: new Date() });
     await req.user.decrement('posts_count');
     res.json({ message: 'Post deleted' });
@@ -338,7 +486,12 @@ app.post('/api/posts/:id/like', auth, async (req, res) => {
     await post.increment('likes_count');
     const updated = await Post.findByPk(post.id);
     if (post.user_id !== req.user.id) {
-      await sendNotification(post.user_id, { type: 'like', actor_id: req.user.id, post_id: post.id, content: `${req.user.username} liked your post` });
+      await sendNotification(post.user_id, {
+        type: 'like',
+        actor_id: req.user.id,
+        post_id: post.id,
+        content: `${req.user.username} liked your post`,
+      });
     }
     res.json({ liked: true, likes_count: updated.likes_count });
   } catch (error) {
@@ -346,15 +499,21 @@ app.post('/api/posts/:id/like', auth, async (req, res) => {
   }
 });
 
-// ============ COMMENT ROUTES ============
+// ============ COMMENTS ============
 app.get('/api/posts/:postId/comments', auth, async (req, res) => {
   const comments = await Comment.findAll({
     where: { post_id: req.params.postId, is_deleted: false, parent_comment_id: null },
     include: [
       { model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] },
-      { model: Comment, as: 'replies', where: { is_deleted: false }, required: false, include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] }
+      {
+        model: Comment,
+        as: 'replies',
+        where: { is_deleted: false },
+        required: false,
+        include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+      },
     ],
-    order: [['created_at', 'DESC']]
+    order: [['created_at', 'DESC']],
   });
   res.json({ comments });
 });
@@ -366,12 +525,25 @@ app.post('/api/posts/:postId/comments', auth, async (req, res) => {
     if (!content || content.trim() === '') return res.status(400).json({ error: 'Comment required' });
     const post = await Post.findByPk(postId);
     if (!post) return res.status(404).json({ error: 'Post not found' });
-    const comment = await Comment.create({ user_id: req.user.id, post_id: postId, content: content.trim(), parent_comment_id: parent_comment_id || null });
+    const comment = await Comment.create({
+      user_id: req.user.id,
+      post_id: postId,
+      content: content.trim(),
+      parent_comment_id: parent_comment_id || null,
+    });
     await post.increment('comments_count');
     if (post.user_id !== req.user.id) {
-      await sendNotification(post.user_id, { type: 'comment', actor_id: req.user.id, post_id: post.id, comment_id: comment.id, content: `${req.user.username} commented on your post` });
+      await sendNotification(post.user_id, {
+        type: 'comment',
+        actor_id: req.user.id,
+        post_id: post.id,
+        comment_id: comment.id,
+        content: `${req.user.username} commented on your post`,
+      });
     }
-    const withUser = await Comment.findByPk(comment.id, { include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] });
+    const withUser = await Comment.findByPk(comment.id, {
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+    });
     res.status(201).json(withUser);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -381,19 +553,20 @@ app.post('/api/posts/:postId/comments', auth, async (req, res) => {
 app.delete('/api/comments/:commentId', auth, async (req, res) => {
   const comment = await Comment.findByPk(req.params.commentId, { include: [{ model: Post, as: 'post' }] });
   if (!comment) return res.status(404).json({ error: 'Comment not found' });
-  if (comment.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
+  if (comment.user_id !== req.user.id && req.user.role !== 'admin')
+    return res.status(403).json({ error: 'Unauthorized' });
   await comment.update({ is_deleted: true, deleted_at: new Date() });
   if (comment.post) await comment.post.decrement('comments_count');
   res.json({ message: 'Comment deleted' });
 });
 
-// ============ HASHTAG ROUTES ============
+// ============ HASHTAGS ============
 app.get('/api/hashtags/trending', async (req, res) => {
   try {
     const trending = await Hashtag.findAll({
       attributes: ['tag', 'post_count'],
       order: [['post_count', 'DESC']],
-      limit: 10
+      limit: 10,
     });
     res.json(trending);
   } catch (error) {
@@ -410,7 +583,7 @@ app.get('/api/hashtags/:tag/posts', async (req, res) => {
       where: { is_deleted: false },
       include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
       order: [['created_at', 'DESC']],
-      limit: 50
+      limit: 50,
     });
     res.json({ posts, count: posts.length, tag: hashtag.tag });
   } catch (error) {
@@ -427,8 +600,8 @@ app.post('/api/upload', auth, upload.single('image'), async (req, res) => {
 
 app.post('/api/upload/multiple', auth, upload.array('images', 4), async (req, res) => {
   if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No files' });
-  const results = await Promise.all(req.files.map(f => uploadToCloudinary(f.buffer)));
-  res.json({ success: true, images: results.map(r => ({ url: r.secure_url, public_id: r.public_id })) });
+  const results = await Promise.all(req.files.map((f) => uploadToCloudinary(f.buffer)));
+  res.json({ success: true, images: results.map((r) => ({ url: r.secure_url, public_id: r.public_id })) });
 });
 
 app.delete('/api/upload/:publicId', auth, async (req, res) => {
@@ -436,20 +609,13 @@ app.delete('/api/upload/:publicId', auth, async (req, res) => {
   res.json({ success: true });
 });
 
-// ============ TEMPORARY DATABASE SYNC ENDPOINT ============
-app.get('/api/sync-db', async (req, res) => {
-  try {
-    await sequelize.sync({ alter: true });
-    res.json({ message: '✅ Database synced successfully!' });
-  } catch (error) {
-    console.error('Sync error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============ NOTIFICATION ROUTES (simplified) ============
+// ============ NOTIFICATIONS ============
 app.get('/api/notifications', auth, async (req, res) => {
-  const notifs = await Notification.findAll({ where: { user_id: req.user.id }, order: [['created_at', 'DESC']], limit: 50 });
+  const notifs = await Notification.findAll({
+    where: { user_id: req.user.id },
+    order: [['created_at', 'DESC']],
+    limit: 50,
+  });
   res.json(notifs);
 });
 
@@ -461,12 +627,28 @@ app.put('/api/notifications/:id/read', auth, async (req, res) => {
 });
 
 app.put('/api/notifications/read-all', auth, async (req, res) => {
-  await Notification.update({ is_read: true, read_at: new Date() }, { where: { user_id: req.user.id, is_read: false } });
+  await Notification.update(
+    { is_read: true, read_at: new Date() },
+    { where: { user_id: req.user.id, is_read: false } }
+  );
   res.json({ message: 'All marked read' });
 });
 
+// ============ TEMPORARY DATABASE SYNC ============
+app.get('/api/sync-db', async (req, res) => {
+  try {
+    await sequelize.sync({ alter: true });
+    res.json({ message: '✅ Database synced successfully!' });
+  } catch (error) {
+    console.error('Sync error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============ ERROR HANDLING ============
-app.use((req, res) => res.status(404).json({ error: `Route ${req.method} ${req.url} not found` }));
+app.use((req, res) => {
+  res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });
+});
 app.use((err, req, res, next) => {
   console.error('Global error:', err);
   res.status(500).json({ error: 'Internal server error' });
@@ -482,10 +664,10 @@ const startServer = async () => {
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`\n🚀 Server on http://0.0.0.0:${PORT}`);
       console.log(`📝 Health: http://localhost:${PORT}/health`);
-      console.log(`🔌 WebSocket enabled`);
+      console.log(`🔌 WebSocket enabled\n`);
     });
   } catch (err) {
-    console.error('❌ Failed:', err.message);
+    console.error('❌ Failed to start server:', err.message);
     process.exit(1);
   }
 };
