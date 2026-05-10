@@ -11,7 +11,7 @@ let sequelize;
 // Check if using DATABASE_URL (production) or individual parameters
 if (dbConfig.url) {
   console.log('📡 Connecting via DATABASE_URL');
-  console.log(`📍 Host: ${dbConfig.url.split('@')[1]?.split('/')[0] || 'hidden'}`);
+  //console.log(`📍 Host: ${dbConfig.url.split('@')[1]?.split('/')[0] || 'hidden'}`);
   sequelize = new Sequelize(dbConfig.url, {
     dialect: 'postgres',
     logging: dbConfig.logging,
