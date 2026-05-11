@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { FiHome, FiUser, FiLogOut, FiSearch, FiBell } from 'react-icons/fi';
 import NotificationBell from './NotificationBell';
+import { FiHome, FiUser, FiLogOut, FiSearch, FiBell, FiMessageSquare } from 'react-icons/fi';
 
 export default function Navbar({ currentUser }) {
   const router = useRouter();
@@ -43,6 +44,10 @@ export default function Navbar({ currentUser }) {
               <FiUser className="text-xl" />
               <span>Profile</span>
             </Link>
+			<Link href="/messages" className="text-gray-300 hover:text-red-500 transition flex items-center space-x-2">
+              <FiMessageSquare className="text-xl" />
+              <span>Messages</span>
+            </Link>
 
             <button onClick={handleLogout} className="text-gray-300 hover:text-red-500 transition flex items-center space-x-2">
               <FiLogOut className="text-xl" />
@@ -55,6 +60,9 @@ export default function Navbar({ currentUser }) {
             <Link href="/search" className="text-gray-300 hover:text-red-500">
               <FiSearch className="text-xl" />
             </Link>
+			<Link href="/messages" className="text-gray-300 hover:text-red-500">
+              <FiMessageSquare className="text-xl" />
+              </Link>
             <NotificationBell currentUser={currentUser} />
             <button onClick={handleLogout} className="text-gray-300 hover:text-red-500">
               <FiLogOut className="text-xl" />

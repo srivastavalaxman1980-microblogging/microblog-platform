@@ -4,6 +4,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
 import Navbar from '../../components/Navbar';
+import { useRouter } from 'next/router';
 
 // Get API URL from environment or use default
 const API_URL = process.env.NEXT_PUBLIC_API_URL || process.env.API_URL || 'https://microblog-backend-1jv9.onrender.com/api';
@@ -251,6 +252,12 @@ export default function ProfilePage({ user: currentUser, isAuthenticated }) {
                   }`}
                 >
                   {isFollowing ? 'Unfollow' : 'Follow'}
+                </button>
+				<button
+                   onClick={() => router.push(`/messages?userId=${profile.id}`)}
+                   className="border border-primary text-primary px-6 py-2 rounded-full hover:bg-primary hover:text-white transition"
+                >
+                  💬 Message
                 </button>
               )}
             </div>

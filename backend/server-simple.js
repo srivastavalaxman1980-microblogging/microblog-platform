@@ -746,6 +746,116 @@ app.get('/api/search/users', auth, async (req, res) => {
   }
 });
 
+// ============ DIRECT MESSAGES ROUTES ============
+
+// Get all conversations for current user
+app.get('/api/conversations', auth, async (req, res) => {
+  try {
+    const conversations = await Conversation.findAll({
+      where: {
+        participants: { [Op.contains]: [req.user.id] },
+      },
+      include: [{ model: Message, as: 'messages', limit: 1, order: [['created_at', 'DESC']] }],
+      order: [['last_message_at', 'DESC']],
+    });
+    // Enrich with other participant's info
+    const enriched = await Promise.all(conversations.map(async (conv) => {
+      const otherUserId = conv.participants.find(id => id !== req.user.id);
+      const otherUser = await User.findByPk(otherUserId, { attributes: ['id', 'username', 'full_name', 'avatar_url'] });
+      return {
+        id: conv.id,
+        otherUser,
+        lastMessage: conv.messages?.[0]?.content || '',
+        lastMessageAt: conv.last_message_at,
+      };
+    }));
+    res.json(enriched);
+  } catch (error) {
+    console.error('Get conversations error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get messages for a specific conversation
+app.get('/api/conversations/:conversationId/messages', auth, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const conversation = await Conversation.findByPk(conversationId);
+    if (!conversation || !conversation.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    const messages = await Message.findAll({
+      where: { conversation_id: conversationId },
+      include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+      order: [['created_at', 'ASC']],
+    });
+    // Mark messages as read
+    await Message.update({ is_read: true, read_at: new Date() }, {
+      where: { conversation_id: conversationId, sender_id: { [Op.ne]: req.user.id }, is_read: false },
+    });
+    res.json(messages);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create or get existing conversation with another user
+app.post('/api/conversations', auth, async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'User ID required' });
+    const otherUser = await User.findByPk(userId);
+    if (!otherUser) return res.status(404).json({ error: 'User not found' });
+    // Check if conversation already exists
+    let conversation = await Conversation.findOne({
+      where: {
+        participants: { [Op.contains]: [req.user.id, userId] },
+      },
+    });
+    if (!conversation) {
+      conversation = await Conversation.create({
+        participants: [req.user.id, userId],
+      });
+    }
+    res.json(conversation);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Send a message (also emits via socket)
+app.post('/api/messages', auth, async (req, res) => {
+  try {
+    const { conversationId, content } = req.body;
+    if (!conversationId || !content.trim()) return res.status(400).json({ error: 'Invalid data' });
+    const conversation = await Conversation.findByPk(conversationId);
+    if (!conversation || !conversation.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    const message = await Message.create({
+      conversation_id: conversationId,
+      sender_id: req.user.id,
+      content: content.trim(),
+    });
+    await conversation.update({
+      last_message: content.trim(),
+      last_message_at: new Date(),
+    });
+    const populatedMessage = await Message.findByPk(message.id, {
+      include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+    });
+    // Emit to recipient via socket
+    const recipientId = conversation.participants.find(id => id !== req.user.id);
+    const recipientSocket = userSockets.get(recipientId);
+    if (recipientSocket) {
+      io.to(recipientSocket).emit('new_message', populatedMessage);
+    }
+    res.status(201).json(populatedMessage);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============ ERROR HANDLING ============
 app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });

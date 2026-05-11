@@ -50,6 +50,8 @@ const ApiKey = require('./ApiKey')(sequelize);
 const Notification = require('./Notification')(sequelize);
 const Like = require('./Like')(sequelize);
 const ModerationLog = require('./ModerationLog')(sequelize);
+const Conversation = require('./Conversation')(sequelize);
+const Message = require('./Message')(sequelize);
 
 // ========== ASSOCIATIONS ==========
 
@@ -66,6 +68,10 @@ User.hasMany(ApiKey, { as: 'api_keys', foreignKey: 'user_id' });
 User.hasMany(Notification, { as: 'notifications', foreignKey: 'user_id' });
 User.hasMany(Report, { as: 'reports_made', foreignKey: 'reported_by' });
 User.hasMany(Report, { as: 'reports_resolved', foreignKey: 'resolved_by' });
+Conversation.hasMany(Message, { foreignKey: 'conversation_id', as: 'messages' });
+Message.belongsTo(Conversation, { foreignKey: 'conversation_id', as: 'conversation' });
+Message.belongsTo(User, { foreignKey: 'sender_id', as: 'sender' });
+User.belongsToMany(Conversation, { through: 'UserConversations', as: 'conversations' });
 
 // ---- Post ----
 Post.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
@@ -142,5 +148,7 @@ module.exports = {
   ApiKey,
   Notification,
   Like,
-  ModerationLog
+  ModerationLog,
+  Conversation,
+  Message
 };

@@ -5,37 +5,34 @@ module.exports = (sequelize) => {
     id: {
       type: DataTypes.UUID,
       defaultValue: DataTypes.UUIDV4,
-      primaryKey: true
+      primaryKey: true,
+    },
+    conversation_id: {
+      type: DataTypes.UUID,
+      allowNull: false,
+      references: { model: 'conversations', key: 'id' },
     },
     sender_id: {
       type: DataTypes.UUID,
-      allowNull: false
-    },
-    receiver_id: {
-      type: DataTypes.UUID,
-      allowNull: false
+      allowNull: false,
+      references: { model: 'users', key: 'id' },
     },
     content: {
       type: DataTypes.TEXT,
-      allowNull: false
+      allowNull: false,
+    },
+    is_read: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
     },
     read_at: {
       type: DataTypes.DATE,
-      allowNull: true
+      allowNull: true,
     },
-    is_deleted_for_sender: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: false
-    },
-    is_deleted_for_receiver: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: false
-    }
   }, {
     tableName: 'messages',
     underscored: true,
-    timestamps: true
+    timestamps: true,
   });
-  
   return Message;
 };
