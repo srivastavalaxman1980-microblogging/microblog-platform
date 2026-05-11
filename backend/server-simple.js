@@ -15,8 +15,10 @@ const {
   Notification,
   Hashtag,
   Like,
+  ModerationLog,
 } = require('./models');
 const { upload, uploadToCloudinary, deleteFromCloudinary } = require('./middleware/upload');
+const { moderateContent } = require('./utils/moderation');
 
 const app = express();
 const server = http.createServer(app);
@@ -332,7 +334,7 @@ app.get('/api/users/:userId/following', auth, async (req, res) => {
   res.json(following.map((f) => f.following));
 });
 
-// ============ POSTS & SHARES ============
+// ============ POSTS & SHARES (with moderation) ============
 app.get('/api/posts/feed', auth, async (req, res) => {
   try {
     const posts = await Post.findAll({
@@ -354,12 +356,18 @@ app.get('/api/posts/feed', auth, async (req, res) => {
   }
 });
 
+// CREATE POST – with moderation
 app.post('/api/posts', auth, async (req, res) => {
   try {
     const { content, visibility = 'public', media_urls = [] } = req.body;
     if (!content || content.trim() === '') {
       return res.status(400).json({ error: 'Content is required' });
     }
+
+    // --- MODERATION CHECK ---
+    await moderateContent(req.user.id, 'post', content, ModerationLog);
+    // ------------------------
+
     const post = await Post.create({
       user_id: req.user.id,
       content: content.trim(),
@@ -389,12 +397,15 @@ app.post('/api/posts', auth, async (req, res) => {
     });
     res.status(201).json(postWithUser);
   } catch (error) {
+    if (error.message.includes('violates our community guidelines')) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Post error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// SHARE (retweet / quote)
+// SHARE (retweet / quote) – also moderated (the share comment)
 app.post('/api/posts/:id/share', auth, async (req, res) => {
   try {
     const originalPost = await Post.findByPk(req.params.id);
@@ -404,6 +415,11 @@ app.post('/api/posts/:id/share', auth, async (req, res) => {
     const { comment } = req.body;
     if (comment && comment.length > 280) {
       return res.status(400).json({ error: 'Share comment too long (max 280 chars)' });
+    }
+
+    // Moderation on share comment (if provided)
+    if (comment && comment.trim()) {
+      await moderateContent(req.user.id, 'post', comment, ModerationLog);
     }
 
     const sharePost = await Post.create({
@@ -440,6 +456,9 @@ app.post('/api/posts/:id/share', auth, async (req, res) => {
 
     res.status(201).json(shareWithDetails);
   } catch (error) {
+    if (error.message.includes('violates our community guidelines')) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Share error:', error);
     res.status(500).json({ error: error.message });
   }
@@ -499,7 +518,7 @@ app.post('/api/posts/:id/like', auth, async (req, res) => {
   }
 });
 
-// ============ COMMENTS ============
+// ============ COMMENTS (with moderation) ============
 app.get('/api/posts/:postId/comments', auth, async (req, res) => {
   const comments = await Comment.findAll({
     where: { post_id: req.params.postId, is_deleted: false, parent_comment_id: null },
@@ -522,9 +541,17 @@ app.post('/api/posts/:postId/comments', auth, async (req, res) => {
   try {
     const { postId } = req.params;
     const { content, parent_comment_id } = req.body;
-    if (!content || content.trim() === '') return res.status(400).json({ error: 'Comment required' });
+    if (!content || content.trim() === '') {
+      return res.status(400).json({ error: 'Comment required' });
+    }
+
+    // --- MODERATION CHECK ---
+    await moderateContent(req.user.id, 'comment', content, ModerationLog);
+    // ------------------------
+
     const post = await Post.findByPk(postId);
     if (!post) return res.status(404).json({ error: 'Post not found' });
+
     const comment = await Comment.create({
       user_id: req.user.id,
       post_id: postId,
@@ -546,6 +573,9 @@ app.post('/api/posts/:postId/comments', auth, async (req, res) => {
     });
     res.status(201).json(withUser);
   } catch (error) {
+    if (error.message.includes('violates our community guidelines')) {
+      return res.status(403).json({ error: error.message });
+    }
     res.status(500).json({ error: error.message });
   }
 });
@@ -632,6 +662,23 @@ app.put('/api/notifications/read-all', auth, async (req, res) => {
     { where: { user_id: req.user.id, is_read: false } }
   );
   res.json({ message: 'All marked read' });
+});
+
+// ============ ADMIN ENDPOINTS (moderation logs) ============
+// Get moderation logs (admin only)
+app.get('/api/admin/moderation-logs', auth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const logs = await ModerationLog.findAll({ order: [['created_at', 'DESC']], limit: 100 });
+  res.json(logs);
+});
+
+// Mark log as reviewed (admin only)
+app.put('/api/admin/moderation-logs/:id/review', auth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const log = await ModerationLog.findByPk(req.params.id);
+  if (!log) return res.status(404).json({ error: 'Not found' });
+  await log.update({ is_reviewed: true, reviewed_by: req.user.id });
+  res.json({ message: 'Reviewed' });
 });
 
 // ============ TEMPORARY DATABASE SYNC ============

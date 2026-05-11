@@ -49,6 +49,7 @@ const AuditLog = require('./AuditLog')(sequelize);
 const ApiKey = require('./ApiKey')(sequelize);
 const Notification = require('./Notification')(sequelize);
 const Like = require('./Like')(sequelize);
+const ModerationLog = require('./ModerationLog')(sequelize);
 
 // ========== ASSOCIATIONS ==========
 
@@ -141,4 +142,5 @@ module.exports = {
   ApiKey,
   Notification,
   Like,
+  ModerationLog
 };
