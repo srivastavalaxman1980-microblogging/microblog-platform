@@ -52,10 +52,17 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
       setImages([]);
       fetchFeed();
     } catch (error) {
-      toast.error('Failed to create post');
-    } finally {
-      setLoading(false);
-    }
+  console.error('Create post error:', error);
+  if (error.response) {
+    // Server responded with an error status (4xx, 5xx)
+    const serverMessage = error.response.data?.error || 'Failed to create post';
+    toast.error(serverMessage);
+  } else if (error.request) {
+    toast.error('No response from server. Check your connection.');
+  } else {
+    toast.error('Failed to create post');
+  }
+}
   };
 
   const handleLike = async (postId) => {
