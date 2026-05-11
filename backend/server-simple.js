@@ -337,21 +337,45 @@ app.get('/api/users/:userId/following', auth, async (req, res) => {
 // ============ POSTS & SHARES (with moderation) ============
 app.get('/api/posts/feed', auth, async (req, res) => {
   try {
-    const posts = await Post.findAll({
-      where: { is_deleted: false },
+    // Get blocked/muted user IDs
+    const blockedUsers = await UserBlock.findAll({
+      where: { blocker_id: req.user.id, type: 'block' },
+      attributes: ['blocked_id'],
+    });
+    const blockedIds = blockedUsers.map(b => b.blocked_id);
+
+    // Get muted keywords
+    const mutedKeywords = await UserMutedKeyword.findAll({
+      where: { user_id: req.user.id },
+      attributes: ['keyword'],
+    });
+    const keywords = mutedKeywords.map(k => k.keyword);
+
+    // Build where clause for posts
+    const whereClause = { is_deleted: false, user_id: { [Op.notIn]: blockedIds } };
+    // If there are muted keywords, we need to exclude posts whose content contains any of them
+    // We'll filter after fetching (simple approach) – but can do SQL LIKE with OR for performance
+    let posts = await Post.findAll({
+      where: whereClause,
       include: [
         { model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] },
-        {
-          model: Post,
-          as: 'original',
-          include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
-        },
+        { model: Post, as: 'original', include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] },
       ],
       order: [['created_at', 'DESC']],
-      limit: 50,
+      limit: 100,
     });
+
+    // Filter out posts containing muted keywords
+    if (keywords.length) {
+      posts = posts.filter(post => {
+        const text = (post.content + ' ' + (post.original?.content || '')).toLowerCase();
+        return !keywords.some(kw => text.includes(kw));
+      });
+    }
+
     res.json({ posts, count: posts.length });
   } catch (error) {
+    console.error('Feed error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -520,30 +544,50 @@ app.post('/api/posts/:id/like', auth, async (req, res) => {
 
 // ============ COMMENTS (with moderation) ============
 app.get('/api/posts/:postId/comments', auth, async (req, res) => {
-  const comments = await Comment.findAll({
-    where: { post_id: req.params.postId, is_deleted: false, parent_comment_id: null },
-    include: [
-      { model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] },
-      {
-        model: Comment,
-        as: 'replies',
-        where: { is_deleted: false },
-        required: false,
-        include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
-      },
-    ],
-    order: [['created_at', 'DESC']],
-  });
-  res.json({ comments });
-});
-
-app.post('/api/posts/:postId/comments', auth, async (req, res) => {
   try {
     const { postId } = req.params;
-    const { content, parent_comment_id } = req.body;
-    if (!content || content.trim() === '') {
-      return res.status(400).json({ error: 'Comment required' });
+    // Get muted keywords
+    const mutedKeywords = await UserMutedKeyword.findAll({
+      where: { user_id: req.user.id },
+      attributes: ['keyword'],
+    });
+    const keywords = mutedKeywords.map(k => k.keyword);
+
+    let comments = await Comment.findAll({
+      where: { post_id: postId, is_deleted: false, parent_comment_id: null },
+      include: [
+        { model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] },
+        {
+          model: Comment,
+          as: 'replies',
+          where: { is_deleted: false },
+          required: false,
+          include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+        },
+      ],
+      order: [['created_at', 'DESC']],
+    });
+
+    // Filter out comments containing muted keywords
+    if (keywords.length) {
+      const filterComment = (comment) => {
+        const text = comment.content.toLowerCase();
+        if (keywords.some(kw => text.includes(kw))) return false;
+        if (comment.replies) comment.replies = comment.replies.filter(reply => {
+          const replyText = reply.content.toLowerCase();
+          return !keywords.some(kw => replyText.includes(kw));
+        });
+        return true;
+      };
+      comments = comments.filter(filterComment);
     }
+
+    res.json({ comments });
+  } catch (error) {
+    console.error('Get comments error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
     // --- MODERATION CHECK ---
     await moderateContent(req.user.id, 'comment', content, ModerationLog);
@@ -856,6 +900,97 @@ app.post('/api/messages', auth, async (req, res) => {
   }
 });
 
+// ============ BLOCK / MUTE / MUTED KEYWORDS ============
+
+// Block or mute a user
+app.post('/api/users/:userId/block', auth, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { type = 'block' } = req.body; // 'block' or 'mute'
+    if (userId === req.user.id) return res.status(400).json({ error: 'Cannot block yourself' });
+    const target = await User.findByPk(userId);
+    if (!target) return res.status(404).json({ error: 'User not found' });
+    await UserBlock.upsert({
+      blocker_id: req.user.id,
+      blocked_id: userId,
+      type,
+    });
+    res.json({ message: `User ${type}ed successfully`, type });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Unblock / unmute a user
+app.delete('/api/users/:userId/block', auth, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { type = 'block' } = req.query;
+    await UserBlock.destroy({
+      where: { blocker_id: req.user.id, blocked_id: userId, type },
+    });
+    res.json({ message: `User ${type} removed` });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get list of blocked/muted users
+app.get('/api/users/blocks', auth, async (req, res) => {
+  try {
+    const blocks = await UserBlock.findAll({
+      where: { blocker_id: req.user.id },
+      include: [{ model: User, as: 'blocked', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+    });
+    const result = {
+      blocked: blocks.filter(b => b.type === 'block').map(b => b.blocked),
+      muted: blocks.filter(b => b.type === 'mute').map(b => b.blocked),
+    };
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add muted keyword
+app.post('/api/users/muted-keywords', auth, async (req, res) => {
+  try {
+    const { keyword } = req.body;
+    if (!keyword || keyword.trim() === '') return res.status(400).json({ error: 'Keyword required' });
+    const normalized = keyword.trim().toLowerCase();
+    const existing = await UserMutedKeyword.findOne({ where: { user_id: req.user.id, keyword: normalized } });
+    if (existing) return res.status(400).json({ error: 'Keyword already muted' });
+    await UserMutedKeyword.create({ user_id: req.user.id, keyword: normalized });
+    res.json({ message: 'Keyword muted', keyword: normalized });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Remove muted keyword
+app.delete('/api/users/muted-keywords/:keyword', auth, async (req, res) => {
+  try {
+    const { keyword } = req.params;
+    await UserMutedKeyword.destroy({ where: { user_id: req.user.id, keyword: keyword.toLowerCase() } });
+    res.json({ message: 'Keyword unmuted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get all muted keywords for the current user
+app.get('/api/users/muted-keywords', auth, async (req, res) => {
+  try {
+    const keywords = await UserMutedKeyword.findAll({
+      where: { user_id: req.user.id },
+      attributes: ['keyword'],
+      order: [['keyword', 'ASC']],
+    });
+    res.json(keywords.map(k => k.keyword));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 // ============ ERROR HANDLING ============
 app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });

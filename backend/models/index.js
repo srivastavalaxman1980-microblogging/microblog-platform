@@ -51,6 +51,8 @@ const ApiKey = require('./ApiKey')(sequelize);
 const Notification = require('./Notification')(sequelize);
 const Like = require('./Like')(sequelize);
 const ModerationLog = require('./ModerationLog')(sequelize);
+const UserBlock = require('./UserBlock')(sequelize);
+const UserMutedKeyword = require('./UserMutedKeyword')(sequelize);
 
 // ========== ASSOCIATIONS ==========
 // User associations
@@ -66,6 +68,9 @@ User.hasMany(ApiKey, { as: 'api_keys', foreignKey: 'user_id' });
 User.hasMany(Notification, { as: 'notifications', foreignKey: 'user_id' });
 User.hasMany(Report, { as: 'reports_made', foreignKey: 'reported_by' });
 User.hasMany(Report, { as: 'reports_resolved', foreignKey: 'resolved_by' });
+User.hasMany(UserBlock, { as: 'blocks', foreignKey: 'blocker_id' });
+User.hasMany(UserBlock, { as: 'blockedBy', foreignKey: 'blocked_id' });
+User.hasMany(UserMutedKeyword, { as: 'mutedKeywords', foreignKey: 'user_id' });
 
 // Post associations
 Post.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
@@ -141,5 +146,7 @@ module.exports = {
   ApiKey,
   Notification,
   Like,
-  ModerationLog,
+  ModerationLog
+  UserBlock,
+  UserMutedKeyword
 };
