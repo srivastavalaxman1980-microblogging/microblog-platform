@@ -43,15 +43,28 @@ export default function ProfilePage({ user: currentUser, isAuthenticated }) {
   };
 
   const handleFollow = async () => {
-    // ... follow logic ...
+    // ... follow/unfollow logic ...
   };
 
-  const handleEditProfile = async (e) => { /* ... edit logic ... */ };
-  const handleTabChange = async (tab) => { /* ... tab logic ... */ };
-  const fetchFollowers = async () => { /* ... */ };
-  const fetchFollowing = async () => { /* ... */ };
+  const handleEditProfile = async (e) => {
+    e.preventDefault();
+    // ... edit profile logic ...
+  };
 
-  // Function to start a conversation
+  const handleTabChange = async (tab) => {
+    setActiveTab(tab);
+    if (tab === 'followers') await fetchFollowers();
+    if (tab === 'following') await fetchFollowing();
+  };
+
+  const fetchFollowers = async () => {
+    // ... fetch followers logic ...
+  };
+
+  const fetchFollowing = async () => {
+    // ... fetch following logic ...
+  };
+
   const startConversation = async () => {
     try {
       const token = localStorage.getItem('token');
@@ -111,7 +124,6 @@ export default function ProfilePage({ user: currentUser, isAuthenticated }) {
                   <button onClick={handleFollow} className={`px-4 py-2 rounded-full transition ${isFollowing ? 'border border-red-500 text-red-500 hover:bg-red-500 hover:text-white' : 'bg-red-500 text-white hover:bg-red-600'}`}>
                     {isFollowing ? 'Unfollow' : 'Follow'}
                   </button>
-                  {/* ✅ FIXED: Message button with onClick function */}
                   <button
                     onClick={startConversation}
                     className="border border-red-500 text-red-500 px-4 py-2 rounded-full hover:bg-red-500 hover:text-white transition flex items-center gap-2"
@@ -208,7 +220,43 @@ export default function ProfilePage({ user: currentUser, isAuthenticated }) {
       </div>
       
       {/* Edit Profile Modal */}
-      {isEditing && ( /* ... modal JSX ... */ )}
+      {isEditing && (
+        <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50">
+          <div className="bg-gray-900 rounded-xl w-full max-w-md p-6 border border-gray-800">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-semibold text-white">Edit Profile</h2>
+              <button onClick={() => setIsEditing(false)} className="text-gray-500 hover:text-white text-2xl">✕</button>
+            </div>
+            <form onSubmit={handleEditProfile} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-1">Full Name</label>
+                <input type="text" value={editForm.full_name} onChange={(e) => setEditForm({...editForm, full_name: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-white focus:outline-none focus:border-red-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-1">Bio</label>
+                <textarea value={editForm.bio} onChange={(e) => setEditForm({...editForm, bio: e.target.value})} rows="3" className="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-white focus:outline-none focus:border-red-500" placeholder="Tell us about yourself..." maxLength="160" />
+                <span className="text-xs text-gray-500">{editForm.bio.length}/160</span>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-1">Location</label>
+                <input type="text" value={editForm.location} onChange={(e) => setEditForm({...editForm, location: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-white focus:outline-none focus:border-red-500" placeholder="City, Country" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-1">Website</label>
+                <input type="url" value={editForm.website} onChange={(e) => setEditForm({...editForm, website: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-white focus:outline-none focus:border-red-500" placeholder="https://..." />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-1">Avatar URL</label>
+                <input type="url" value={editForm.avatar_url} onChange={(e) => setEditForm({...editForm, avatar_url: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-white focus:outline-none focus:border-red-500" placeholder="https://..." />
+              </div>
+              <div className="flex justify-end space-x-3 pt-2">
+                <button type="button" onClick={() => setIsEditing(false)} className="px-4 py-2 text-gray-400 hover:text-white">Cancel</button>
+                <button type="submit" className="bg-red-500 text-white px-6 py-2 rounded-full font-semibold hover:bg-red-600">Save Changes</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
