@@ -15,6 +15,10 @@ const {
   Notification,
   Hashtag,
   Like,
+  Conversation,
+  Message,
+  UserBlock,
+  UserMutedKeyword,
   ModerationLog,
 } = require('./models');
 const { upload, uploadToCloudinary, deleteFromCloudinary } = require('./middleware/upload');
@@ -59,7 +63,7 @@ app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ============ SOCKET.IO (real‑time) ============
+// ============ SOCKET.IO ============
 const io = socketIo(server, {
   cors: {
     origin: allowedOrigins,
@@ -120,23 +124,12 @@ console.log('JWT_SECRET exists:', !!process.env.JWT_SECRET);
 console.log('Cloudinary configured:', !!process.env.CLOUDINARY_CLOUD_NAME);
 console.log('========================\n');
 
-// ============ SIMPLE TEST ROUTES ============
+// ============ SIMPLE ROUTES ============
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString(), port: PORT });
 });
 app.get('/', (req, res) => {
-  res.json({
-    message: 'Aureon API',
-    version: '2.0.0',
-    endpoints: {
-      health: 'GET /health',
-      auth: 'POST /api/auth/register, POST /api/auth/login',
-      posts: 'GET /api/posts/feed, POST /api/posts, PUT /api/posts/:id, DELETE /api/posts/:id',
-      share: 'POST /api/posts/:id/share',
-      hashtags: 'GET /api/hashtags/trending, GET /api/hashtags/:tag/posts',
-      upload: 'POST /api/upload, POST /api/upload/multiple, DELETE /api/upload/:publicId',
-    },
-  });
+  res.json({ message: 'Aureon API', version: '2.0.0' });
 });
 
 // ============ AUTH MIDDLEWARE ============
@@ -161,11 +154,8 @@ const auth = async (req, res, next) => {
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { username, email, password, full_name } = req.body;
-    if (!username || !email || !password)
-      return res.status(400).json({ error: 'Missing fields' });
-    const existing = await User.findOne({
-      where: { [Op.or]: [{ username }, { email }] },
-    });
+    if (!username || !email || !password) return res.status(400).json({ error: 'Missing fields' });
+    const existing = await User.findOne({ where: { [Op.or]: [{ username }, { email }] } });
     if (existing) return res.status(400).json({ error: 'Username or email exists' });
     const hashed = await bcrypt.hash(password, 10);
     const user = await User.create({
@@ -174,11 +164,7 @@ app.post('/api/auth/register', async (req, res) => {
       password_hash: hashed,
       full_name: full_name || username,
     });
-    const token = jwt.sign(
-      { id: user.id, username: user.username },
-      process.env.JWT_SECRET || 'secret',
-      { expiresIn: '7d' }
-    );
+    const token = jwt.sign({ id: user.id, username: user.username }, process.env.JWT_SECRET || 'secret', { expiresIn: '7d' });
     res.json({
       token,
       user: {
@@ -190,7 +176,6 @@ app.post('/api/auth/register', async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('Register error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -198,18 +183,13 @@ app.post('/api/auth/register', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password)
-      return res.status(400).json({ error: 'Email and password required' });
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
     const user = await User.findOne({ where: { email } });
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
     await user.update({ last_login_at: new Date() });
-    const token = jwt.sign(
-      { id: user.id, username: user.username },
-      process.env.JWT_SECRET || 'secret',
-      { expiresIn: '7d' }
-    );
+    const token = jwt.sign({ id: user.id, username: user.username }, process.env.JWT_SECRET || 'secret', { expiresIn: '7d' });
     res.json({
       token,
       user: {
@@ -229,9 +209,7 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/users/:identifier', auth, async (req, res) => {
   try {
     const { identifier } = req.params;
-    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      identifier
-    );
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identifier);
     const user = isUUID
       ? await User.findByPk(identifier, { attributes: { exclude: ['password_hash'] } })
       : await User.findOne({ where: { username: identifier }, attributes: { exclude: ['password_hash'] } });
@@ -239,9 +217,7 @@ app.get('/api/users/:identifier', auth, async (req, res) => {
     const postCount = await Post.count({ where: { user_id: user.id, is_deleted: false } });
     let isFollowing = false;
     if (req.user.id !== user.id) {
-      const follow = await Follower.findOne({
-        where: { follower_id: req.user.id, following_id: user.id, status: 'accepted' },
-      });
+      const follow = await Follower.findOne({ where: { follower_id: req.user.id, following_id: user.id, status: 'accepted' } });
       isFollowing = !!follow;
     }
     const recentPosts = await Post.findAll({
@@ -283,11 +259,8 @@ app.post('/api/users/:userId/follow', auth, async (req, res) => {
     if (userId === req.user.id) return res.status(400).json({ error: 'Cannot follow yourself' });
     const target = await User.findByPk(userId);
     if (!target) return res.status(404).json({ error: 'User not found' });
-    const existing = await Follower.findOne({
-      where: { follower_id: req.user.id, following_id: userId },
-    });
-    if (existing && existing.status === 'accepted')
-      return res.status(400).json({ error: 'Already following' });
+    const existing = await Follower.findOne({ where: { follower_id: req.user.id, following_id: userId } });
+    if (existing && existing.status === 'accepted') return res.status(400).json({ error: 'Already following' });
     await Follower.upsert({ follower_id: req.user.id, following_id: userId, status: 'accepted' });
     await target.increment('followers_count');
     await User.increment('following_count', { where: { id: req.user.id } });
@@ -305,9 +278,7 @@ app.post('/api/users/:userId/follow', auth, async (req, res) => {
 app.delete('/api/users/:userId/follow', auth, async (req, res) => {
   try {
     const { userId } = req.params;
-    const follow = await Follower.findOne({
-      where: { follower_id: req.user.id, following_id: userId },
-    });
+    const follow = await Follower.findOne({ where: { follower_id: req.user.id, following_id: userId } });
     if (!follow) return res.status(400).json({ error: 'Not following' });
     await follow.destroy();
     await User.decrement('followers_count', { where: { id: userId } });
@@ -334,42 +305,118 @@ app.get('/api/users/:userId/following', auth, async (req, res) => {
   res.json(following.map((f) => f.following));
 });
 
-// ============ POSTS & SHARES (with moderation) ============
+// ============ BLOCK / MUTE ============
+app.post('/api/users/:userId/block', auth, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { type = 'block' } = req.body;
+    if (userId === req.user.id) return res.status(400).json({ error: 'Cannot block yourself' });
+    const target = await User.findByPk(userId);
+    if (!target) return res.status(404).json({ error: 'User not found' });
+    await UserBlock.upsert({ blocker_id: req.user.id, blocked_id: userId, type });
+    res.json({ message: `User ${type}ed successfully`, type });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/users/:userId/block', auth, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { type = 'block' } = req.query;
+    await UserBlock.destroy({ where: { blocker_id: req.user.id, blocked_id: userId, type } });
+    res.json({ message: `User ${type} removed` });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/users/blocks', auth, async (req, res) => {
+  try {
+    const blocks = await UserBlock.findAll({
+      where: { blocker_id: req.user.id },
+      include: [{ model: User, as: 'blocked', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+    });
+    const result = {
+      blocked: blocks.filter((b) => b.type === 'block').map((b) => b.blocked),
+      muted: blocks.filter((b) => b.type === 'mute').map((b) => b.blocked),
+    };
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/users/muted-keywords', auth, async (req, res) => {
+  try {
+    const { keyword } = req.body;
+    if (!keyword || keyword.trim() === '') return res.status(400).json({ error: 'Keyword required' });
+    const normalized = keyword.trim().toLowerCase();
+    const existing = await UserMutedKeyword.findOne({ where: { user_id: req.user.id, keyword: normalized } });
+    if (existing) return res.status(400).json({ error: 'Keyword already muted' });
+    await UserMutedKeyword.create({ user_id: req.user.id, keyword: normalized });
+    res.json({ message: 'Keyword muted', keyword: normalized });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/users/muted-keywords/:keyword', auth, async (req, res) => {
+  try {
+    const { keyword } = req.params;
+    await UserMutedKeyword.destroy({ where: { user_id: req.user.id, keyword: keyword.toLowerCase() } });
+    res.json({ message: 'Keyword unmuted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/users/muted-keywords', auth, async (req, res) => {
+  try {
+    const keywords = await UserMutedKeyword.findAll({
+      where: { user_id: req.user.id },
+      attributes: ['keyword'],
+      order: [['keyword', 'ASC']],
+    });
+    res.json(keywords.map((k) => k.keyword));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ POSTS & SHARES (with moderation & filtering) ============
 app.get('/api/posts/feed', auth, async (req, res) => {
   try {
-    // Get blocked/muted user IDs
     const blockedUsers = await UserBlock.findAll({
       where: { blocker_id: req.user.id, type: 'block' },
       attributes: ['blocked_id'],
     });
-    const blockedIds = blockedUsers.map(b => b.blocked_id);
+    const blockedIds = blockedUsers.map((b) => b.blocked_id);
 
-    // Get muted keywords
     const mutedKeywords = await UserMutedKeyword.findAll({
       where: { user_id: req.user.id },
       attributes: ['keyword'],
     });
-    const keywords = mutedKeywords.map(k => k.keyword);
+    const keywords = mutedKeywords.map((k) => k.keyword);
 
-    // Build where clause for posts
-    const whereClause = { is_deleted: false, user_id: { [Op.notIn]: blockedIds } };
-    // If there are muted keywords, we need to exclude posts whose content contains any of them
-    // We'll filter after fetching (simple approach) – but can do SQL LIKE with OR for performance
     let posts = await Post.findAll({
-      where: whereClause,
+      where: { is_deleted: false, user_id: { [Op.notIn]: blockedIds } },
       include: [
         { model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] },
-        { model: Post, as: 'original', include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] },
+        {
+          model: Post,
+          as: 'original',
+          include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+        },
       ],
       order: [['created_at', 'DESC']],
       limit: 100,
     });
 
-    // Filter out posts containing muted keywords
     if (keywords.length) {
-      posts = posts.filter(post => {
+      posts = posts.filter((post) => {
         const text = (post.content + ' ' + (post.original?.content || '')).toLowerCase();
-        return !keywords.some(kw => text.includes(kw));
+        return !keywords.some((kw) => text.includes(kw));
       });
     }
 
@@ -380,17 +427,12 @@ app.get('/api/posts/feed', auth, async (req, res) => {
   }
 });
 
-// CREATE POST – with moderation
 app.post('/api/posts', auth, async (req, res) => {
   try {
     const { content, visibility = 'public', media_urls = [] } = req.body;
-    if (!content || content.trim() === '') {
-      return res.status(400).json({ error: 'Content is required' });
-    }
+    if (!content || content.trim() === '') return res.status(400).json({ error: 'Content is required' });
 
-    // --- MODERATION CHECK ---
     await moderateContent(req.user.id, 'post', content, ModerationLog);
-    // ------------------------
 
     const post = await Post.create({
       user_id: req.user.id,
@@ -402,7 +444,6 @@ app.post('/api/posts', auth, async (req, res) => {
       shares_count: 0,
     });
 
-    // extract hashtags
     const hashtagRegex = /#(\w+)/g;
     const matches = content.match(hashtagRegex);
     if (matches) {
@@ -429,7 +470,6 @@ app.post('/api/posts', auth, async (req, res) => {
   }
 });
 
-// SHARE (retweet / quote) – also moderated (the share comment)
 app.post('/api/posts/:id/share', auth, async (req, res) => {
   try {
     const originalPost = await Post.findByPk(req.params.id);
@@ -437,14 +477,8 @@ app.post('/api/posts/:id/share', auth, async (req, res) => {
     if (originalPost.is_deleted) return res.status(400).json({ error: 'Cannot share a deleted post' });
 
     const { comment } = req.body;
-    if (comment && comment.length > 280) {
-      return res.status(400).json({ error: 'Share comment too long (max 280 chars)' });
-    }
-
-    // Moderation on share comment (if provided)
-    if (comment && comment.trim()) {
-      await moderateContent(req.user.id, 'post', comment, ModerationLog);
-    }
+    if (comment && comment.length > 280) return res.status(400).json({ error: 'Share comment too long' });
+    if (comment && comment.trim()) await moderateContent(req.user.id, 'post', comment, ModerationLog);
 
     const sharePost = await Post.create({
       user_id: req.user.id,
@@ -477,12 +511,9 @@ app.post('/api/posts/:id/share', auth, async (req, res) => {
         content: `${req.user.username} shared your post`,
       });
     }
-
     res.status(201).json(shareWithDetails);
   } catch (error) {
-    if (error.message.includes('violates our community guidelines')) {
-      return res.status(403).json({ error: error.message });
-    }
+    if (error.message.includes('violates our community guidelines')) return res.status(403).json({ error: error.message });
     console.error('Share error:', error);
     res.status(500).json({ error: error.message });
   }
@@ -493,8 +524,7 @@ app.put('/api/posts/:id', auth, async (req, res) => {
     const { content, media_urls } = req.body;
     const post = await Post.findByPk(req.params.id);
     if (!post) return res.status(404).json({ error: 'Post not found' });
-    if (post.user_id !== req.user.id && req.user.role !== 'admin')
-      return res.status(403).json({ error: 'Unauthorized' });
+    if (post.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
     const updateData = { updated_at: new Date() };
     if (content !== undefined) updateData.content = content.trim();
     if (media_urls !== undefined) updateData.media_urls = media_urls;
@@ -512,8 +542,7 @@ app.delete('/api/posts/:id', auth, async (req, res) => {
   try {
     const post = await Post.findByPk(req.params.id);
     if (!post) return res.status(404).json({ error: 'Post not found' });
-    if (post.user_id !== req.user.id && req.user.role !== 'admin')
-      return res.status(403).json({ error: 'Unauthorized' });
+    if (post.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
     await post.update({ is_deleted: true, deleted_at: new Date() });
     await req.user.decrement('posts_count');
     res.json({ message: 'Post deleted' });
@@ -542,19 +571,17 @@ app.post('/api/posts/:id/like', auth, async (req, res) => {
   }
 });
 
-// ============ COMMENTS (with moderation) ============
+// ============ COMMENTS (with moderation & filtering) ============
 app.get('/api/posts/:postId/comments', auth, async (req, res) => {
   try {
-    const { postId } = req.params;
-    // Get muted keywords
     const mutedKeywords = await UserMutedKeyword.findAll({
       where: { user_id: req.user.id },
       attributes: ['keyword'],
     });
-    const keywords = mutedKeywords.map(k => k.keyword);
+    const keywords = mutedKeywords.map((k) => k.keyword);
 
     let comments = await Comment.findAll({
-      where: { post_id: postId, is_deleted: false, parent_comment_id: null },
+      where: { post_id: req.params.postId, is_deleted: false, parent_comment_id: null },
       include: [
         { model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] },
         {
@@ -568,20 +595,18 @@ app.get('/api/posts/:postId/comments', auth, async (req, res) => {
       order: [['created_at', 'DESC']],
     });
 
-    // Filter out comments containing muted keywords
     if (keywords.length) {
       const filterComment = (comment) => {
         const text = comment.content.toLowerCase();
-        if (keywords.some(kw => text.includes(kw))) return false;
-        if (comment.replies) comment.replies = comment.replies.filter(reply => {
+        if (keywords.some((kw) => text.includes(kw))) return false;
+        if (comment.replies) comment.replies = comment.replies.filter((reply) => {
           const replyText = reply.content.toLowerCase();
-          return !keywords.some(kw => replyText.includes(kw));
+          return !keywords.some((kw) => replyText.includes(kw));
         });
         return true;
       };
       comments = comments.filter(filterComment);
     }
-
     res.json({ comments });
   } catch (error) {
     console.error('Get comments error:', error);
@@ -589,9 +614,13 @@ app.get('/api/posts/:postId/comments', auth, async (req, res) => {
   }
 });
 
-    // --- MODERATION CHECK ---
+app.post('/api/posts/:postId/comments', auth, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const { content, parent_comment_id } = req.body;
+    if (!content || content.trim() === '') return res.status(400).json({ error: 'Comment required' });
+
     await moderateContent(req.user.id, 'comment', content, ModerationLog);
-    // ------------------------
 
     const post = await Post.findByPk(postId);
     if (!post) return res.status(404).json({ error: 'Post not found' });
@@ -620,6 +649,7 @@ app.get('/api/posts/:postId/comments', auth, async (req, res) => {
     if (error.message.includes('violates our community guidelines')) {
       return res.status(403).json({ error: error.message });
     }
+    console.error('Create comment error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -627,8 +657,7 @@ app.get('/api/posts/:postId/comments', auth, async (req, res) => {
 app.delete('/api/comments/:commentId', auth, async (req, res) => {
   const comment = await Comment.findByPk(req.params.commentId, { include: [{ model: Post, as: 'post' }] });
   if (!comment) return res.status(404).json({ error: 'Comment not found' });
-  if (comment.user_id !== req.user.id && req.user.role !== 'admin')
-    return res.status(403).json({ error: 'Unauthorized' });
+  if (comment.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
   await comment.update({ is_deleted: true, deleted_at: new Date() });
   if (comment.post) await comment.post.decrement('comments_count');
   res.json({ message: 'Comment deleted' });
@@ -648,7 +677,7 @@ app.get('/api/hashtags/trending', async (req, res) => {
   }
 });
 
-app.get('/api/hashtags/:tag/posts', async (req, res) => {
+app.get('/api/hashtags/:tag/posts', auth, async (req, res) => {
   try {
     const { tag } = req.params;
     const hashtag = await Hashtag.findOne({ where: { tag: tag.toLowerCase() } });
@@ -660,6 +689,140 @@ app.get('/api/hashtags/:tag/posts', async (req, res) => {
       limit: 50,
     });
     res.json({ posts, count: posts.length, tag: hashtag.tag });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ SEARCH ============
+app.get('/api/search/posts', auth, async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.trim() === '') return res.json({ posts: [], count: 0 });
+    const searchTerm = `%${q.trim().toLowerCase()}%`;
+    const posts = await Post.findAll({
+      where: {
+        is_deleted: false,
+        [Op.or]: [sequelize.where(sequelize.fn('LOWER', sequelize.col('content')), 'LIKE', searchTerm)],
+      },
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+      order: [['created_at', 'DESC']],
+      limit: 50,
+    });
+    res.json({ posts, count: posts.length });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/search/users', auth, async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.trim() === '') return res.json({ users: [], count: 0 });
+    const searchTerm = `%${q.trim().toLowerCase()}%`;
+    const users = await User.findAll({
+      where: {
+        [Op.or]: [
+          sequelize.where(sequelize.fn('LOWER', sequelize.col('username')), 'LIKE', searchTerm),
+          sequelize.where(sequelize.fn('LOWER', sequelize.col('full_name')), 'LIKE', searchTerm),
+        ],
+      },
+      attributes: ['id', 'username', 'full_name', 'avatar_url', 'bio'],
+      limit: 30,
+    });
+    res.json({ users, count: users.length });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ DIRECT MESSAGES ============
+app.get('/api/conversations', auth, async (req, res) => {
+  try {
+    const conversations = await Conversation.findAll({
+      where: { participants: { [Op.contains]: [req.user.id] } },
+      include: [{ model: Message, as: 'messages', limit: 1, order: [['created_at', 'DESC']] }],
+      order: [['last_message_at', 'DESC']],
+    });
+    const enriched = await Promise.all(
+      conversations.map(async (conv) => {
+        const otherUserId = conv.participants.find((id) => id !== req.user.id);
+        const otherUser = await User.findByPk(otherUserId, { attributes: ['id', 'username', 'full_name', 'avatar_url'] });
+        return {
+          id: conv.id,
+          otherUser,
+          lastMessage: conv.messages?.[0]?.content || '',
+          lastMessageAt: conv.last_message_at,
+        };
+      })
+    );
+    res.json(enriched);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/conversations/:conversationId/messages', auth, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const conversation = await Conversation.findByPk(conversationId);
+    if (!conversation || !conversation.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    const messages = await Message.findAll({
+      where: { conversation_id: conversationId },
+      include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+      order: [['created_at', 'ASC']],
+    });
+    await Message.update(
+      { is_read: true, read_at: new Date() },
+      { where: { conversation_id: conversationId, sender_id: { [Op.ne]: req.user.id }, is_read: false } }
+    );
+    res.json(messages);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/conversations', auth, async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'User ID required' });
+    const otherUser = await User.findByPk(userId);
+    if (!otherUser) return res.status(404).json({ error: 'User not found' });
+    let conversation = await Conversation.findOne({
+      where: { participants: { [Op.contains]: [req.user.id, userId] } },
+    });
+    if (!conversation) {
+      conversation = await Conversation.create({ participants: [req.user.id, userId] });
+    }
+    res.json(conversation);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/messages', auth, async (req, res) => {
+  try {
+    const { conversationId, content } = req.body;
+    if (!conversationId || !content.trim()) return res.status(400).json({ error: 'Invalid data' });
+    const conversation = await Conversation.findByPk(conversationId);
+    if (!conversation || !conversation.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    const message = await Message.create({
+      conversation_id: conversationId,
+      sender_id: req.user.id,
+      content: content.trim(),
+    });
+    await conversation.update({ last_message: content.trim(), last_message_at: new Date() });
+    const populated = await Message.findByPk(message.id, {
+      include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+    });
+    const recipientId = conversation.participants.find((id) => id !== req.user.id);
+    const recipientSocket = userSockets.get(recipientId);
+    if (recipientSocket) io.to(recipientSocket).emit('new_message', populated);
+    res.status(201).json(populated);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -701,22 +864,17 @@ app.put('/api/notifications/:id/read', auth, async (req, res) => {
 });
 
 app.put('/api/notifications/read-all', auth, async (req, res) => {
-  await Notification.update(
-    { is_read: true, read_at: new Date() },
-    { where: { user_id: req.user.id, is_read: false } }
-  );
+  await Notification.update({ is_read: true, read_at: new Date() }, { where: { user_id: req.user.id, is_read: false } });
   res.json({ message: 'All marked read' });
 });
 
-// ============ ADMIN ENDPOINTS (moderation logs) ============
-// Get moderation logs (admin only)
+// ============ ADMIN MODERATION LOGS ============
 app.get('/api/admin/moderation-logs', auth, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
   const logs = await ModerationLog.findAll({ order: [['created_at', 'DESC']], limit: 100 });
   res.json(logs);
 });
 
-// Mark log as reviewed (admin only)
 app.put('/api/admin/moderation-logs/:id/review', auth, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
   const log = await ModerationLog.findByPk(req.params.id);
@@ -736,262 +894,7 @@ app.get('/api/sync-db', async (req, res) => {
   }
 });
 
-
-// ============ SEARCH ROUTES ============
-
-// Search posts by content (case‑insensitive, partial match)
-app.get('/api/search/posts', auth, async (req, res) => {
-  try {
-    const { q } = req.query;
-    if (!q || q.trim() === '') {
-      return res.json({ posts: [], count: 0 });
-    }
-    const searchTerm = `%${q.trim().toLowerCase()}%`;
-    const posts = await Post.findAll({
-      where: {
-        is_deleted: false,
-        [Op.or]: [
-          sequelize.where(sequelize.fn('LOWER', sequelize.col('content')), 'LIKE', searchTerm),
-        ],
-      },
-      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
-      order: [['created_at', 'DESC']],
-      limit: 50,
-    });
-    res.json({ posts, count: posts.length });
-  } catch (error) {
-    console.error('Search posts error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Search users by username or full name (case‑insensitive, partial match)
-app.get('/api/search/users', auth, async (req, res) => {
-  try {
-    const { q } = req.query;
-    if (!q || q.trim() === '') {
-      return res.json({ users: [], count: 0 });
-    }
-    const searchTerm = `%${q.trim().toLowerCase()}%`;
-    const users = await User.findAll({
-      where: {
-        [Op.or]: [
-          sequelize.where(sequelize.fn('LOWER', sequelize.col('username')), 'LIKE', searchTerm),
-          sequelize.where(sequelize.fn('LOWER', sequelize.col('full_name')), 'LIKE', searchTerm),
-        ],
-      },
-      attributes: ['id', 'username', 'full_name', 'avatar_url', 'bio'],
-      limit: 30,
-    });
-    res.json({ users, count: users.length });
-  } catch (error) {
-    console.error('Search users error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============ DIRECT MESSAGES ROUTES ============
-
-// Get all conversations for current user
-app.get('/api/conversations', auth, async (req, res) => {
-  try {
-    const conversations = await Conversation.findAll({
-      where: {
-        participants: { [Op.contains]: [req.user.id] },
-      },
-      include: [{ model: Message, as: 'messages', limit: 1, order: [['created_at', 'DESC']] }],
-      order: [['last_message_at', 'DESC']],
-    });
-    // Enrich with other participant's info
-    const enriched = await Promise.all(conversations.map(async (conv) => {
-      const otherUserId = conv.participants.find(id => id !== req.user.id);
-      const otherUser = await User.findByPk(otherUserId, { attributes: ['id', 'username', 'full_name', 'avatar_url'] });
-      return {
-        id: conv.id,
-        otherUser,
-        lastMessage: conv.messages?.[0]?.content || '',
-        lastMessageAt: conv.last_message_at,
-      };
-    }));
-    res.json(enriched);
-  } catch (error) {
-    console.error('Get conversations error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get messages for a specific conversation
-app.get('/api/conversations/:conversationId/messages', auth, async (req, res) => {
-  try {
-    const { conversationId } = req.params;
-    const conversation = await Conversation.findByPk(conversationId);
-    if (!conversation || !conversation.participants.includes(req.user.id)) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-    const messages = await Message.findAll({
-      where: { conversation_id: conversationId },
-      include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
-      order: [['created_at', 'ASC']],
-    });
-    // Mark messages as read
-    await Message.update({ is_read: true, read_at: new Date() }, {
-      where: { conversation_id: conversationId, sender_id: { [Op.ne]: req.user.id }, is_read: false },
-    });
-    res.json(messages);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Create or get existing conversation with another user
-app.post('/api/conversations', auth, async (req, res) => {
-  try {
-    const { userId } = req.body;
-    if (!userId) return res.status(400).json({ error: 'User ID required' });
-    const otherUser = await User.findByPk(userId);
-    if (!otherUser) return res.status(404).json({ error: 'User not found' });
-    // Check if conversation already exists
-    let conversation = await Conversation.findOne({
-      where: {
-        participants: { [Op.contains]: [req.user.id, userId] },
-      },
-    });
-    if (!conversation) {
-      conversation = await Conversation.create({
-        participants: [req.user.id, userId],
-      });
-    }
-    res.json(conversation);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Send a message (also emits via socket)
-app.post('/api/messages', auth, async (req, res) => {
-  try {
-    const { conversationId, content } = req.body;
-    if (!conversationId || !content.trim()) return res.status(400).json({ error: 'Invalid data' });
-    const conversation = await Conversation.findByPk(conversationId);
-    if (!conversation || !conversation.participants.includes(req.user.id)) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-    const message = await Message.create({
-      conversation_id: conversationId,
-      sender_id: req.user.id,
-      content: content.trim(),
-    });
-    await conversation.update({
-      last_message: content.trim(),
-      last_message_at: new Date(),
-    });
-    const populatedMessage = await Message.findByPk(message.id, {
-      include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
-    });
-    // Emit to recipient via socket
-    const recipientId = conversation.participants.find(id => id !== req.user.id);
-    const recipientSocket = userSockets.get(recipientId);
-    if (recipientSocket) {
-      io.to(recipientSocket).emit('new_message', populatedMessage);
-    }
-    res.status(201).json(populatedMessage);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============ BLOCK / MUTE / MUTED KEYWORDS ============
-
-// Block or mute a user
-app.post('/api/users/:userId/block', auth, async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { type = 'block' } = req.body; // 'block' or 'mute'
-    if (userId === req.user.id) return res.status(400).json({ error: 'Cannot block yourself' });
-    const target = await User.findByPk(userId);
-    if (!target) return res.status(404).json({ error: 'User not found' });
-    await UserBlock.upsert({
-      blocker_id: req.user.id,
-      blocked_id: userId,
-      type,
-    });
-    res.json({ message: `User ${type}ed successfully`, type });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Unblock / unmute a user
-app.delete('/api/users/:userId/block', auth, async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { type = 'block' } = req.query;
-    await UserBlock.destroy({
-      where: { blocker_id: req.user.id, blocked_id: userId, type },
-    });
-    res.json({ message: `User ${type} removed` });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get list of blocked/muted users
-app.get('/api/users/blocks', auth, async (req, res) => {
-  try {
-    const blocks = await UserBlock.findAll({
-      where: { blocker_id: req.user.id },
-      include: [{ model: User, as: 'blocked', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
-    });
-    const result = {
-      blocked: blocks.filter(b => b.type === 'block').map(b => b.blocked),
-      muted: blocks.filter(b => b.type === 'mute').map(b => b.blocked),
-    };
-    res.json(result);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Add muted keyword
-app.post('/api/users/muted-keywords', auth, async (req, res) => {
-  try {
-    const { keyword } = req.body;
-    if (!keyword || keyword.trim() === '') return res.status(400).json({ error: 'Keyword required' });
-    const normalized = keyword.trim().toLowerCase();
-    const existing = await UserMutedKeyword.findOne({ where: { user_id: req.user.id, keyword: normalized } });
-    if (existing) return res.status(400).json({ error: 'Keyword already muted' });
-    await UserMutedKeyword.create({ user_id: req.user.id, keyword: normalized });
-    res.json({ message: 'Keyword muted', keyword: normalized });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Remove muted keyword
-app.delete('/api/users/muted-keywords/:keyword', auth, async (req, res) => {
-  try {
-    const { keyword } = req.params;
-    await UserMutedKeyword.destroy({ where: { user_id: req.user.id, keyword: keyword.toLowerCase() } });
-    res.json({ message: 'Keyword unmuted' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get all muted keywords for the current user
-app.get('/api/users/muted-keywords', auth, async (req, res) => {
-  try {
-    const keywords = await UserMutedKeyword.findAll({
-      where: { user_id: req.user.id },
-      attributes: ['keyword'],
-      order: [['keyword', 'ASC']],
-    });
-    res.json(keywords.map(k => k.keyword));
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-// ============ ERROR HANDLING ============
+// ============ 404 & ERROR HANDLERS ============
 app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });
 });
