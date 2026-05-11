@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { FiHome, FiUser, FiLogOut, FiBell, FiMessageSquare, FiTrendingUp, FiBookmark } from 'react-icons/fi';
+import { FiHome, FiUser, FiLogOut, FiSearch, FiBell } from 'react-icons/fi';
 import NotificationBell from './NotificationBell';
 
 export default function Navbar({ currentUser }) {
@@ -23,38 +23,38 @@ export default function Navbar({ currentUser }) {
           <Link href="/" className="text-2xl font-bold bg-gradient-to-r from-red-500 to-white bg-clip-text text-transparent">
             Aureon
           </Link>
-          
+
           {/* Desktop Navigation */}
           <div className="hidden md:flex items-center space-x-8">
             <Link href="/" className="text-gray-300 hover:text-red-500 transition flex items-center space-x-2">
               <FiHome className="text-xl" />
               <span>Home</span>
             </Link>
-            <Link href="/explore" className="text-gray-300 hover:text-red-500 transition flex items-center space-x-2">
-              <FiTrendingUp className="text-xl" />
-              <span>Explore</span>
+
+            {/* Search Link */}
+            <Link href="/search" className="text-gray-300 hover:text-red-500 transition flex items-center space-x-2">
+              <FiSearch className="text-xl" />
+              <span>Search</span>
             </Link>
-            <Link href="/bookmarks" className="text-gray-300 hover:text-red-500 transition flex items-center space-x-2">
-              <FiBookmark className="text-xl" />
-              <span>Bookmarks</span>
-            </Link>
-            <Link href="/messages" className="text-gray-300 hover:text-red-500 transition flex items-center space-x-2">
-              <FiMessageSquare className="text-xl" />
-              <span>Messages</span>
-            </Link>
+
             <NotificationBell currentUser={currentUser} />
+
             <Link href={`/profile/${currentUser.id}`} className="text-gray-300 hover:text-red-500 transition flex items-center space-x-2">
               <FiUser className="text-xl" />
               <span>Profile</span>
             </Link>
+
             <button onClick={handleLogout} className="text-gray-300 hover:text-red-500 transition flex items-center space-x-2">
               <FiLogOut className="text-xl" />
               <span>Logout</span>
             </button>
           </div>
-          
-          {/* Mobile menu button (simplified) */}
+
+          {/* Mobile menu (simplified) */}
           <div className="md:hidden flex items-center space-x-4">
+            <Link href="/search" className="text-gray-300 hover:text-red-500">
+              <FiSearch className="text-xl" />
+            </Link>
             <NotificationBell currentUser={currentUser} />
             <button onClick={handleLogout} className="text-gray-300 hover:text-red-500">
               <FiLogOut className="text-xl" />

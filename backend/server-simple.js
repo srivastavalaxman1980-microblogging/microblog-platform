@@ -692,6 +692,60 @@ app.get('/api/sync-db', async (req, res) => {
   }
 });
 
+
+// ============ SEARCH ROUTES ============
+
+// Search posts by content (case‑insensitive, partial match)
+app.get('/api/search/posts', auth, async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.trim() === '') {
+      return res.json({ posts: [], count: 0 });
+    }
+    const searchTerm = `%${q.trim().toLowerCase()}%`;
+    const posts = await Post.findAll({
+      where: {
+        is_deleted: false,
+        [Op.or]: [
+          sequelize.where(sequelize.fn('LOWER', sequelize.col('content')), 'LIKE', searchTerm),
+        ],
+      },
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+      order: [['created_at', 'DESC']],
+      limit: 50,
+    });
+    res.json({ posts, count: posts.length });
+  } catch (error) {
+    console.error('Search posts error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Search users by username or full name (case‑insensitive, partial match)
+app.get('/api/search/users', auth, async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.trim() === '') {
+      return res.json({ users: [], count: 0 });
+    }
+    const searchTerm = `%${q.trim().toLowerCase()}%`;
+    const users = await User.findAll({
+      where: {
+        [Op.or]: [
+          sequelize.where(sequelize.fn('LOWER', sequelize.col('username')), 'LIKE', searchTerm),
+          sequelize.where(sequelize.fn('LOWER', sequelize.col('full_name')), 'LIKE', searchTerm),
+        ],
+      },
+      attributes: ['id', 'username', 'full_name', 'avatar_url', 'bio'],
+      limit: 30,
+    });
+    res.json({ users, count: users.length });
+  } catch (error) {
+    console.error('Search users error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============ ERROR HANDLING ============
 app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });
