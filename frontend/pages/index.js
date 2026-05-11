@@ -52,17 +52,18 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
       setImages([]);
       fetchFeed();
     } catch (error) {
-  console.error('Create post error:', error);
-  if (error.response) {
-    // Server responded with an error status (4xx, 5xx)
-    const serverMessage = error.response.data?.error || 'Failed to create post';
-    toast.error(serverMessage);
-  } else if (error.request) {
-    toast.error('No response from server. Check your connection.');
-  } else {
-    toast.error('Failed to create post');
-  }
-}
+      console.error('Create post error:', error);
+      if (error.response) {
+        const serverMessage = error.response.data?.error || 'Failed to create post';
+        toast.error(serverMessage);
+      } else if (error.request) {
+        toast.error('No response from server. Check your connection.');
+      } else {
+        toast.error('Failed to create post');
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleLike = async (postId) => {
@@ -90,7 +91,6 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
   };
 
   const handleShareSuccess = (newShare) => {
-    // Add the new share to the top of the feed (optimistic update)
     setPosts(prev => [newShare, ...prev]);
     toast.success('Post shared!');
   };
@@ -175,7 +175,7 @@ export default function Home({ isAuthenticated, user, setIsAuthenticated, setUse
   );
 }
 
-// LoginPage (unchanged, kept for completeness)
+// LoginPage Component (unchanged)
 function LoginPage({ setIsAuthenticated, setUser }) {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
@@ -239,6 +239,153 @@ function LoginPage({ setIsAuthenticated, setUser }) {
             {isLogin ? 'Sign Up' : 'Login'}
           </button>
         </p>
+      </div>
+    </div>
+  );
+}
+
+// ============ FIXED COMMENT SECTION ============
+function CommentSection({ postId, currentUser }) {
+  const [comments, setComments] = useState([]);
+  const [newComment, setNewComment] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [replyToId, setReplyToId] = useState(null);
+
+  useEffect(() => {
+    fetchComments();
+  }, [postId]);
+
+  const fetchComments = async () => {
+    try {
+      const res = await axios.get(`${API_URL}/posts/${postId}/comments`);
+      setComments(res.data.comments || []);
+    } catch (error) {
+      console.error('Error fetching comments:', error);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!newComment.trim()) return;
+    setLoading(true);
+    try {
+      const payload = {
+        content: newComment.trim(),
+        parent_comment_id: replyToId || null,
+      };
+      await axios.post(`${API_URL}/posts/${postId}/comments`, payload);
+      toast.success('Comment added');
+      setNewComment('');
+      setReplyingTo(null);
+      setReplyToId(null);
+      await fetchComments(); // refresh comments
+    } catch (error) {
+      const msg = error.response?.data?.error || 'Failed to comment';
+      toast.error(msg);
+    } finally {
+      setLoading(false); // always reset loading
+    }
+  };
+
+  const formatDate = (date) => {
+    if (!date) return 'Just now';
+    const d = new Date(date);
+    const now = new Date();
+    const diff = (now - d) / 1000;
+    if (diff < 60) return `${Math.floor(diff)}s`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+    return d.toLocaleDateString();
+  };
+
+  return (
+    <div className="mt-4 pt-4 border-t border-gray-800">
+      <h4 className="font-semibold text-white mb-2">Comments ({comments.length})</h4>
+      <form onSubmit={handleSubmit} className="mb-4">
+        {replyingTo && (
+          <div className="mb-2 text-sm text-red-400">
+            Replying to @{replyingTo}
+            <button
+              type="button"
+              onClick={() => {
+                setReplyingTo(null);
+                setReplyToId(null);
+                setNewComment('');
+              }}
+              className="ml-2 text-gray-400 hover:text-white"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+        <textarea
+          value={newComment}
+          onChange={(e) => setNewComment(e.target.value)}
+          placeholder={replyingTo ? `Reply to @${replyingTo}...` : 'Write a comment...'}
+          rows="2"
+          className="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-white focus:outline-none focus:border-red-500"
+          maxLength="500"
+        />
+        <div className="flex justify-between items-center mt-2">
+          <span className="text-xs text-gray-500">{newComment.length}/500</span>
+          <button
+            type="submit"
+            disabled={loading}
+            className="bg-red-500 text-white px-4 py-1 rounded-full text-sm font-semibold hover:bg-red-600 disabled:opacity-50"
+          >
+            {loading ? 'Posting...' : replyingTo ? 'Reply' : 'Post'}
+          </button>
+        </div>
+      </form>
+
+      <div className="space-y-3 max-h-96 overflow-y-auto">
+        {comments.length === 0 ? (
+          <p className="text-gray-500 text-sm text-center py-4">No comments yet. Be the first!</p>
+        ) : (
+          comments.map((comment) => (
+            <div key={comment.id} className="bg-gray-800 p-3 rounded-lg">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-white text-sm">
+                  {comment.user?.full_name || comment.user?.username}
+                </span>
+                <span className="text-xs text-gray-500">@{comment.user?.username}</span>
+                <span className="text-xs text-gray-500">{formatDate(comment.created_at)}</span>
+              </div>
+              <p className="text-sm text-gray-300 mt-1">{comment.content}</p>
+              <div className="flex items-center gap-4 mt-2">
+                <button
+                  onClick={() => {
+                    setReplyingTo(comment.user?.username);
+                    setReplyToId(comment.id);
+                    setNewComment('');
+                  }}
+                  className="text-xs text-gray-400 hover:text-red-400"
+                >
+                  Reply
+                </button>
+              </div>
+
+              {/* Nested replies */}
+              {comment.replies && comment.replies.length > 0 && (
+                <div className="ml-6 mt-3 space-y-2 border-l border-gray-700 pl-3">
+                  {comment.replies.map((reply) => (
+                    <div key={reply.id} className="bg-gray-750 p-2 rounded">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-white text-xs">
+                          {reply.user?.full_name || reply.user?.username}
+                        </span>
+                        <span className="text-xs text-gray-500">@{reply.user?.username}</span>
+                        <span className="text-xs text-gray-500">{formatDate(reply.created_at)}</span>
+                      </div>
+                      <p className="text-xs text-gray-300 mt-1">{reply.content}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))
+        )}
       </div>
     </div>
   );
