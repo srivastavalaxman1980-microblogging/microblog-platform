@@ -24,6 +24,10 @@ module.exports = (sequelize) => {
       type: DataTypes.ARRAY(DataTypes.STRING),
       defaultValue: [],
     },
+    category: {
+      type: DataTypes.STRING,
+      allowNull: true, // e.g., 'discrimination', 'misogyny', 'homophobia', etc.
+    },
     reason: {
       type: DataTypes.STRING,
       allowNull: false,
