@@ -32,12 +32,13 @@ if (dbConfig.url) {
   );
 }
 
-// ========== IMPORT MODELS ==========
+// ========== IMPORT MODELS (EACH ONCE) ==========
 const User = require('./User')(sequelize);
 const Post = require('./Post')(sequelize);
 const Comment = require('./Comment')(sequelize);
 const Follower = require('./Follower')(sequelize);
 const Message = require('./Message')(sequelize);
+const Conversation = require('./Conversation')(sequelize);
 const Group = require('./Group')(sequelize);
 const GroupMember = require('./GroupMember')(sequelize);
 const Ad = require('./Ad')(sequelize);
@@ -50,12 +51,9 @@ const ApiKey = require('./ApiKey')(sequelize);
 const Notification = require('./Notification')(sequelize);
 const Like = require('./Like')(sequelize);
 const ModerationLog = require('./ModerationLog')(sequelize);
-const Conversation = require('./Conversation')(sequelize);
-const Message = require('./Message')(sequelize);
 
 // ========== ASSOCIATIONS ==========
-
-// ---- User ----
+// User associations
 User.hasMany(Post, { foreignKey: 'user_id', as: 'posts' });
 User.hasMany(Comment, { foreignKey: 'user_id', as: 'comments' });
 User.hasMany(Like, { foreignKey: 'user_id', as: 'likes' });
@@ -68,66 +66,60 @@ User.hasMany(ApiKey, { as: 'api_keys', foreignKey: 'user_id' });
 User.hasMany(Notification, { as: 'notifications', foreignKey: 'user_id' });
 User.hasMany(Report, { as: 'reports_made', foreignKey: 'reported_by' });
 User.hasMany(Report, { as: 'reports_resolved', foreignKey: 'resolved_by' });
-Conversation.hasMany(Message, { foreignKey: 'conversation_id', as: 'messages' });
-Message.belongsTo(Conversation, { foreignKey: 'conversation_id', as: 'conversation' });
-Message.belongsTo(User, { foreignKey: 'sender_id', as: 'sender' });
-User.belongsToMany(Conversation, { through: 'UserConversations', as: 'conversations' });
 
-// ---- Post ----
+// Post associations
 Post.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 Post.hasMany(Comment, { foreignKey: 'post_id', as: 'comments' });
 Post.hasMany(Like, { foreignKey: 'post_id', as: 'likes' });
 Post.belongsToMany(Hashtag, { through: PostHashtag, as: 'hashtags' });
-
-// Self‑reference for shares (retweet / quote)
 Post.belongsTo(Post, { as: 'original', foreignKey: 'shared_from' });
 Post.hasMany(Post, { as: 'shares', foreignKey: 'shared_from' });
 
-// ---- Comment ----
+// Comment associations
 Comment.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 Comment.belongsTo(Post, { foreignKey: 'post_id', as: 'post' });
 Comment.hasMany(Comment, { foreignKey: 'parent_comment_id', as: 'replies' });
 Comment.belongsTo(Comment, { foreignKey: 'parent_comment_id', as: 'parent' });
 
-// ---- Follower ----
+// Follower associations
 Follower.belongsTo(User, { as: 'follower', foreignKey: 'follower_id' });
 Follower.belongsTo(User, { as: 'following', foreignKey: 'following_id' });
 
-// ---- Message ----
-Message.belongsTo(User, { as: 'sender', foreignKey: 'sender_id' });
-Message.belongsTo(User, { as: 'receiver', foreignKey: 'receiver_id' });
+// Message & Conversation associations
+Conversation.hasMany(Message, { foreignKey: 'conversation_id', as: 'messages' });
+Message.belongsTo(Conversation, { foreignKey: 'conversation_id', as: 'conversation' });
+Message.belongsTo(User, { foreignKey: 'sender_id', as: 'sender' });
 
-// ---- Group / GroupMember ----
+// Group associations
 Group.belongsTo(User, { as: 'owner', foreignKey: 'owner_id' });
 Group.hasMany(GroupMember, { as: 'members', foreignKey: 'group_id' });
 Group.belongsToMany(User, { through: GroupMember, as: 'users' });
 GroupMember.belongsTo(User, { as: 'user', foreignKey: 'user_id' });
 GroupMember.belongsTo(Group, { as: 'group', foreignKey: 'group_id' });
 
-// ---- Hashtag ----
+// Hashtag associations
 Hashtag.belongsToMany(Post, { through: PostHashtag, as: 'posts' });
 
-// ---- Like ----
+// Like associations
 Like.belongsTo(User, { as: 'user', foreignKey: 'user_id' });
 Like.belongsTo(Post, { as: 'post', foreignKey: 'post_id' });
 
-// ---- ApiKey ----
+// ApiKey associations
 ApiKey.belongsTo(User, { as: 'user', foreignKey: 'user_id' });
 
-// ---- Notification ----
+// Notification associations
 Notification.belongsTo(User, { as: 'user', foreignKey: 'user_id' });
 Notification.belongsTo(User, { as: 'actor', foreignKey: 'actor_id' });
 Notification.belongsTo(Post, { as: 'post', foreignKey: 'post_id' });
 
-// ---- Report ----
+// Report associations
 Report.belongsTo(User, { as: 'reporter', foreignKey: 'reported_by' });
 Report.belongsTo(User, { as: 'resolver', foreignKey: 'resolved_by' });
 Report.belongsTo(Post, { as: 'post', foreignKey: 'post_id' });
 
-// ---- Analytics & Ad (simplified) ----
-Analytics.belongsTo(User, { foreignKey: 'user_id' });
-Analytics.belongsTo(Post, { foreignKey: 'post_id' });
-Ad.belongsTo(User, { foreignKey: 'user_id' });
+// ModerationLog associations
+ModerationLog.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+ModerationLog.belongsTo(User, { foreignKey: 'reviewed_by', as: 'reviewer' });
 
 module.exports = {
   sequelize,
@@ -137,6 +129,7 @@ module.exports = {
   Comment,
   Follower,
   Message,
+  Conversation,
   Group,
   GroupMember,
   Ad,
@@ -149,6 +142,4 @@ module.exports = {
   Notification,
   Like,
   ModerationLog,
-  Conversation,
-  Message
 };
