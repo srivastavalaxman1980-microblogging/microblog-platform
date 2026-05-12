@@ -25,6 +25,7 @@ const {
   PollVote,
   PostView,
   FollowerHistory,
+  BlacklistEntry,
 } = require('./models');
 const { upload, uploadToCloudinary, deleteFromCloudinary } = require('./middleware/upload');
 const { moderateContent } = require('./utils/moderation');
@@ -35,6 +36,12 @@ const {
   recordPost,
   cleanup,
 } = require('./utils/spamDetection');
+const {
+  filterContent,
+  addBlacklistKeyword,
+  removeBlacklistKeyword,
+  listBlacklistKeywords,
+} = require('./utils/contentFilter');
 
 const app = express();
 const server = http.createServer(app);
@@ -402,7 +409,7 @@ app.get('/api/users/muted-keywords', auth, async (req, res) => {
   }
 });
 
-// ============ POSTS (with spam detection, moderation, pinning) ============
+// ============ POSTS (with spam detection, content filtering, moderation, pinning) ============
 app.get('/api/posts/feed', auth, async (req, res) => {
   try {
     const blockedUsers = await UserBlock.findAll({
@@ -467,6 +474,12 @@ app.post('/api/posts', auth, async (req, res) => {
     }
     if (isDuplicatePost(req.user.id, content)) {
       return res.status(409).json({ error: 'Duplicate post. Please wait before reposting.' });
+    }
+
+    // Content filtering (profanity, NSFW, custom blacklist)
+    const filterResult = await filterContent(content);
+    if (filterResult.isViolation) {
+      return res.status(403).json({ error: `Content blocked: ${filterResult.reason}` });
     }
 
     // Hate speech moderation
@@ -543,7 +556,14 @@ app.post('/api/posts/:id/share', auth, async (req, res) => {
 
     const { comment } = req.body;
     if (comment && comment.length > 280) return res.status(400).json({ error: 'Share comment too long' });
-    if (comment && comment.trim()) await moderateContent(req.user.id, 'post', comment, ModerationLog);
+    if (comment && comment.trim()) {
+      // Apply content filtering and moderation to share comment as well
+      const filterResult = await filterContent(comment);
+      if (filterResult.isViolation) {
+        return res.status(403).json({ error: `Content blocked: ${filterResult.reason}` });
+      }
+      await moderateContent(req.user.id, 'post', comment, ModerationLog);
+    }
 
     const sharePost = await Post.create({
       user_id: req.user.id,
@@ -675,7 +695,7 @@ app.delete('/api/posts/:id/pin', auth, async (req, res) => {
   }
 });
 
-// ============ COMMENTS (with spam detection) ============
+// ============ COMMENTS (with spam detection, content filtering, moderation) ============
 app.get('/api/posts/:postId/comments', auth, async (req, res) => {
   try {
     const mutedKeywords = await UserMutedKeyword.findAll({
@@ -734,6 +754,12 @@ app.post('/api/posts/:postId/comments', auth, async (req, res) => {
     }
     if (isDuplicatePost(req.user.id, content)) {
       return res.status(409).json({ error: 'Duplicate comment. Please wait.' });
+    }
+
+    // Content filtering (profanity, NSFW, custom blacklist)
+    const filterResult = await filterContent(content);
+    if (filterResult.isViolation) {
+      return res.status(403).json({ error: `Content blocked: ${filterResult.reason}` });
     }
 
     // Hate speech moderation
@@ -928,6 +954,11 @@ app.post('/api/messages', auth, async (req, res) => {
     const conversation = await Conversation.findByPk(conversationId);
     if (!conversation || !conversation.participants.includes(req.user.id)) {
       return res.status(403).json({ error: 'Not authorized' });
+    }
+    // Optional: filter messages for profanity/NSFW
+    const filterResult = await filterContent(content);
+    if (filterResult.isViolation) {
+      return res.status(403).json({ error: `Message blocked: ${filterResult.reason}` });
     }
     const message = await Message.create({
       conversation_id: conversationId,
@@ -1127,7 +1158,7 @@ app.put('/api/notifications/read-all', auth, async (req, res) => {
   res.json({ message: 'All marked read' });
 });
 
-// ============ ADMIN MODERATION LOGS ============
+// ============ ADMIN MODERATION LOGS & BLACKLIST ============
 app.get('/api/admin/moderation-logs', auth, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
   const logs = await ModerationLog.findAll({ order: [['created_at', 'DESC']], limit: 100 });
@@ -1140,6 +1171,28 @@ app.put('/api/admin/moderation-logs/:id/review', auth, async (req, res) => {
   if (!log) return res.status(404).json({ error: 'Not found' });
   await log.update({ is_reviewed: true, reviewed_by: req.user.id });
   res.json({ message: 'Reviewed' });
+});
+
+// Blacklist management (admin only)
+app.get('/api/admin/blacklist', auth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const keywords = await listBlacklistKeywords();
+  res.json({ keywords });
+});
+
+app.post('/api/admin/blacklist', auth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const { keyword, category } = req.body;
+  if (!keyword || keyword.trim() === '') return res.status(400).json({ error: 'Keyword required' });
+  await addBlacklistKeyword(keyword, category || 'custom', req.user.id);
+  res.json({ message: 'Keyword added to blacklist' });
+});
+
+app.delete('/api/admin/blacklist/:keyword', auth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const { keyword } = req.params;
+  await removeBlacklistKeyword(keyword);
+  res.json({ message: 'Keyword removed from blacklist' });
 });
 
 // ============ TEMPORARY DATABASE SYNC ============

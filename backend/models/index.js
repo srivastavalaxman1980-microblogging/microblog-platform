@@ -56,6 +56,7 @@ const UserBlock = require('./UserBlock')(sequelize);
 const UserMutedKeyword = require('./UserMutedKeyword')(sequelize);
 const PostView = require('./PostView')(sequelize);
 const FollowerHistory = require('./FollowerHistory')(sequelize);
+const BlacklistEntry = require('./BlacklistEntry')(sequelize);
 
 // ========== ASSOCIATIONS ==========
 
@@ -166,4 +167,5 @@ module.exports = {
   UserMutedKeyword,
   PostView,
   FollowerHistory,
+  BlacklistEntry,
 };
