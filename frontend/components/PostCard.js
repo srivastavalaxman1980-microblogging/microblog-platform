@@ -66,6 +66,30 @@ export default function PostCard({ post, onLike, onDelete, onEdit, currentUser, 
   // Determine if this post is a share (retweet)
   const isShared = !!post.shared_from;
   const originalPost = post.original;
+  
+  const handlePin = async () => {
+  try {
+    const token = localStorage.getItem('token');
+    if (post.is_pinned) {
+      await axios.delete(`${API_URL}/posts/${post.id}/pin`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      toast.success('Post unpinned');
+    } else {
+      // Optional: show expiry selector
+      const expires = prompt('Pin expiry? (1d, 7d, 30d, or leave empty for permanent)');
+      const valid = ['1d', '7d', '30d'].includes(expires) ? expires : undefined;
+      await axios.post(`${API_URL}/posts/${post.id}/pin`, { expires_in: valid }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      toast.success('Post pinned');
+    }
+    // Refresh feed or update local state
+    onPinToggle && onPinToggle(post.id);
+  } catch (error) {
+    toast.error('Failed to pin/unpin');
+  }
+};
 
   return (
     <>
@@ -95,7 +119,12 @@ export default function PostCard({ post, onLike, onDelete, onEdit, currentUser, 
                     <div className="absolute right-0 mt-2 w-32 bg-gray-800 border border-gray-700 shadow-lg rounded-md z-10">
                       <button onClick={handleEdit} className="block w-full text-left px-4 py-2 text-sm text-white hover:bg-gray-700">Edit</button>
                       <button onClick={handleDelete} className="block w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-gray-700">Delete</button>
-                    </div>
+                    // Inside the menu dropdown (where Edit/Delete appear), add:
+                      <button onClick={handlePin} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                      📌 {post.is_pinned ? 'Unpin' : 'Pin to profile'}
+                     </button>
+					</div>
+					
                   )}
                 </div>
               )}

@@ -220,12 +220,29 @@ app.get('/api/users/:identifier', auth, async (req, res) => {
       const follow = await Follower.findOne({ where: { follower_id: req.user.id, following_id: user.id, status: 'accepted' } });
       isFollowing = !!follow;
     }
-    const recentPosts = await Post.findAll({
+	// Before query, unpin expired posts
+     await Post.update(
+    { is_pinned: false, pinned_at: null, pin_expires_at: null },
+    { where: { is_pinned: true, pin_expires_at: { [Op.lt]: new Date() } } }
+     );
+	
+	
+    /*const recentPosts = await Post.findAll({
       where: { user_id: user.id, is_deleted: false },
       include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
       order: [['created_at', 'DESC']],
       limit: 10,
-    });
+    });*/
+	// Inside the profile route, replace the recentPosts query:
+      const recentPosts = await Post.findAll({
+      where: { user_id: user.id, is_deleted: false },
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+      order: [
+      ['is_pinned', 'DESC'], // pinned posts first
+      ['created_at', 'DESC']
+      ],
+      limit: 10,
+     });
     res.json({
       user: {
         ...user.toJSON(),
@@ -1002,6 +1019,47 @@ app.post('/api/users/record-followers', auth, async (req, res) => {
   res.json({ message: 'Follower history recorded' });
 });
 
+// ============ PIN / UNPIN POSTS ============
+
+// Pin a post
+app.post('/api/posts/:id/pin', auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { expires_in } = req.body; // optional: '1d', '7d', '30d'
+    const post = await Post.findByPk(id);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (post.user_id !== req.user.id) return res.status(403).json({ error: 'Unauthorized' });
+    let expiresAt = null;
+    if (expires_in) {
+      const now = new Date();
+      if (expires_in === '1d') expiresAt = new Date(now.setDate(now.getDate() + 1));
+      else if (expires_in === '7d') expiresAt = new Date(now.setDate(now.getDate() + 7));
+      else if (expires_in === '30d') expiresAt = new Date(now.setDate(now.getDate() + 30));
+    }
+    await post.update({
+      is_pinned: true,
+      pinned_at: new Date(),
+      pin_expires_at: expiresAt,
+    });
+    res.json({ message: 'Post pinned successfully', post });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Unpin a post
+app.delete('/api/posts/:id/pin', auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const post = await Post.findByPk(id);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (post.user_id !== req.user.id) return res.status(403).json({ error: 'Unauthorized' });
+    await post.update({ is_pinned: false, pinned_at: null, pin_expires_at: null });
+    res.json({ message: 'Post unpinned successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 // ============ 404 & ERROR HANDLERS ============
 app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });

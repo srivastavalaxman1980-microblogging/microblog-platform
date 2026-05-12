@@ -52,7 +52,21 @@ module.exports = (sequelize) => {
       allowNull: true,
       validate: { len: [0, 280] }
     }
-  }, {
+  },
+// Add inside the model definition
+is_pinned: {
+  type: DataTypes.BOOLEAN,
+  defaultValue: false,
+},
+pinned_at: {
+  type: DataTypes.DATE,
+  allowNull: true,
+},
+pin_expires_at: {
+  type: DataTypes.DATE,
+  allowNull: true,
+},
+  {
     tableName: 'posts',
     underscored: true,
     timestamps: true
