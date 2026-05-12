@@ -894,6 +894,114 @@ app.get('/api/sync-db', async (req, res) => {
   }
 });
 
+// Track post view (call when post is loaded in feed or detail)
+app.post('/api/posts/:postId/view', auth, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const post = await Post.findByPk(postId);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    // Record view (avoid duplicate within a short time? We'll allow all for simplicity)
+    await PostView.create({
+      post_id: postId,
+      user_id: req.user.id,
+    });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Track view error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/posts/:postId/analytics', auth, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const post = await Post.findByPk(postId);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    // Check if user owns the post
+    if (post.user_id !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+    const viewCount = await PostView.count({ where: { post_id: postId } });
+    const engagement = {
+      likes: post.likes_count || 0,
+      comments: post.comments_count || 0,
+      shares: post.shares_count || 0,
+      total_engagement: (post.likes_count || 0) + (post.comments_count || 0) + (post.shares_count || 0),
+      engagement_rate: viewCount > 0 ? ((post.likes_count + post.comments_count + post.shares_count) / viewCount) * 100 : 0,
+    };
+    res.json({
+      post_id: postId,
+      content: post.content,
+      created_at: post.created_at,
+      views: viewCount,
+      engagement,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/users/analytics', auth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    // Follower growth (last 30 days)
+    const followerHistory = await FollowerHistory.findAll({
+      where: { user_id: userId },
+      order: [['recorded_at', 'ASC']],
+    });
+    // Get user's posts engagement by hour/day
+    const posts = await Post.findAll({
+      where: { user_id: userId, is_deleted: false },
+      attributes: ['created_at', 'likes_count', 'comments_count', 'shares_count'],
+    });
+    const hourlyEngagement = Array(24).fill(0);
+    const hourlyCounts = Array(24).fill(0);
+    const dailyEngagement = Array(7).fill(0); // 0 = Sunday, etc.
+    posts.forEach(post => {
+      const hour = new Date(post.created_at).getHours();
+      const day = new Date(post.created_at).getDay();
+      const engagement = (post.likes_count || 0) + (post.comments_count || 0) + (post.shares_count || 0);
+      hourlyEngagement[hour] += engagement;
+      hourlyCounts[hour] += 1;
+      dailyEngagement[day] += engagement;
+    });
+    // Average engagement per hour
+    const bestHours = hourlyEngagement.map((total, i) => ({
+      hour: i,
+      avgEngagement: hourlyCounts[i] ? total / hourlyCounts[i] : 0,
+    })).sort((a,b) => b.avgEngagement - a.avgEngagement).slice(0, 3);
+    const bestDays = dailyEngagement.map((total, i) => ({
+      day: i,
+      totalEngagement: total,
+    })).sort((a,b) => b.totalEngagement - a.totalEngagement).slice(0, 2);
+    res.json({
+      follower_growth: followerHistory.map(entry => ({
+        date: entry.recorded_at,
+        count: entry.count,
+      })),
+      best_times: {
+        hours: bestHours,
+        days: bestDays,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/users/record-followers', auth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const users = await User.findAll({ attributes: ['id', 'followers_count'] });
+  for (const user of users) {
+    await FollowerHistory.create({
+      user_id: user.id,
+      count: user.followers_count,
+      recorded_at: new Date(),
+    });
+  }
+  res.json({ message: 'Follower history recorded' });
+});
+
 // ============ 404 & ERROR HANDLERS ============
 app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });

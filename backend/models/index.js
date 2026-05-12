@@ -4,6 +4,7 @@ const config = require('../config/config');
 const env = process.env.NODE_ENV || 'development';
 const dbConfig = config[env];
 
+
 console.log(`🔧 Initializing database connection in ${env} mode...`);
 
 let sequelize;
@@ -53,6 +54,8 @@ const Like = require('./Like')(sequelize);
 const ModerationLog = require('./ModerationLog')(sequelize);
 const UserBlock = require('./UserBlock')(sequelize);
 const UserMutedKeyword = require('./UserMutedKeyword')(sequelize);
+const PostView = require('./PostView')(sequelize);
+const FollowerHistory = require('./FollowerHistory')(sequelize);
 
 // ========== ASSOCIATIONS ==========
 
@@ -72,6 +75,7 @@ User.hasMany(Report, { as: 'reports_resolved', foreignKey: 'resolved_by' });
 User.hasMany(UserBlock, { as: 'blocks', foreignKey: 'blocker_id' });
 User.hasMany(UserBlock, { as: 'blockedBy', foreignKey: 'blocked_id' });
 User.hasMany(UserMutedKeyword, { as: 'mutedKeywords', foreignKey: 'user_id' });
+User.hasMany(FollowerHistory, { foreignKey: 'user_id', as: 'followerHistory' });
 
 // ---- Post ----
 Post.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
@@ -80,6 +84,9 @@ Post.hasMany(Like, { foreignKey: 'post_id', as: 'likes' });
 Post.belongsToMany(Hashtag, { through: PostHashtag, as: 'hashtags' });
 Post.belongsTo(Post, { as: 'original', foreignKey: 'shared_from' });
 Post.hasMany(Post, { as: 'shares', foreignKey: 'shared_from' });
+Post.hasMany(PostView, { foreignKey: 'post_id', as: 'views' });
+PostView.belongsTo(Post, { foreignKey: 'post_id', as: 'post' });
+
 
 // ---- Comment ----
 Comment.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
@@ -157,4 +164,6 @@ module.exports = {
   ModerationLog,
   UserBlock,
   UserMutedKeyword,
+  PostView,
+  FollowerHistory,
 };
