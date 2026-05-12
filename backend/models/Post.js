@@ -5,71 +5,69 @@ module.exports = (sequelize) => {
     id: {
       type: DataTypes.UUID,
       defaultValue: DataTypes.UUIDV4,
-      primaryKey: true
+      primaryKey: true,
     },
     user_id: {
       type: DataTypes.UUID,
-      allowNull: false
+      allowNull: false,
     },
     content: {
       type: DataTypes.TEXT,
       allowNull: false,
-      validate: { notEmpty: true, len: [1, 280] }
     },
     media_urls: {
       type: DataTypes.ARRAY(DataTypes.STRING),
-      defaultValue: []
+      defaultValue: [],
     },
     visibility: {
       type: DataTypes.STRING,
-      defaultValue: 'public'
+      defaultValue: 'public',
     },
     likes_count: {
       type: DataTypes.INTEGER,
-      defaultValue: 0
+      defaultValue: 0,
     },
     comments_count: {
       type: DataTypes.INTEGER,
-      defaultValue: 0
+      defaultValue: 0,
     },
     shares_count: {
       type: DataTypes.INTEGER,
-      defaultValue: 0
+      defaultValue: 0,
     },
     is_deleted: {
       type: DataTypes.BOOLEAN,
-      defaultValue: false
+      defaultValue: false,
     },
-    deleted_at: DataTypes.DATE,
-    // Share/retweet fields
+    deleted_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
     shared_from: {
       type: DataTypes.UUID,
       allowNull: true,
-      references: { model: 'posts', key: 'id' }
     },
     share_comment: {
       type: DataTypes.TEXT,
       allowNull: true,
-      validate: { len: [0, 280] }
-    }
-  },
-// Add inside the model definition
-is_pinned: {
-  type: DataTypes.BOOLEAN,
-  defaultValue: false,
-},
-pinned_at: {
-  type: DataTypes.DATE,
-  allowNull: true,
-},
-pin_expires_at: {
-  type: DataTypes.DATE,
-  allowNull: true,
-},
-  {
+    },
+    // 🔽 NEW PIN FIELDS 🔽
+    is_pinned: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+    },
+    pinned_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    pin_expires_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+  }, {
     tableName: 'posts',
     underscored: true,
-    timestamps: true
+    timestamps: true,
   });
   return Post;
 };
