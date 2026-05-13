@@ -48,7 +48,6 @@ const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
 
-
 // ============ CORS ============
 const allowedOrigins = [
   'http://localhost:3000',
@@ -239,7 +238,6 @@ app.get('/api/users/:identifier', auth, async (req, res) => {
       const follow = await Follower.findOne({ where: { follower_id: req.user.id, following_id: user.id, status: 'accepted' } });
       isFollowing = !!follow;
     }
-    // Auto‑unpin expired pins before fetching
     await Post.update(
       { is_pinned: false, pinned_at: null, pin_expires_at: null },
       { where: { is_pinned: true, pin_expires_at: { [Op.lt]: new Date() } } }
@@ -247,19 +245,11 @@ app.get('/api/users/:identifier', auth, async (req, res) => {
     const recentPosts = await Post.findAll({
       where: { user_id: user.id, is_deleted: false },
       include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
-      order: [
-        ['is_pinned', 'DESC'],
-        ['created_at', 'DESC'],
-      ],
+      order: [['is_pinned', 'DESC'], ['created_at', 'DESC']],
       limit: 10,
     });
     res.json({
-      user: {
-        ...user.toJSON(),
-        post_count: postCount,
-        followers_count: user.followers_count || 0,
-        following_count: user.following_count || 0,
-      },
+      user: { ...user.toJSON(), post_count: postCount, followers_count: user.followers_count || 0, following_count: user.following_count || 0 },
       isFollowing,
       recentPosts,
     });
@@ -291,11 +281,7 @@ app.post('/api/users/:userId/follow', auth, async (req, res) => {
     await Follower.upsert({ follower_id: req.user.id, following_id: userId, status: 'accepted' });
     await target.increment('followers_count');
     await User.increment('following_count', { where: { id: req.user.id } });
-    await sendNotification(userId, {
-      type: 'follow',
-      actor_id: req.user.id,
-      content: `${req.user.username} started following you`,
-    });
+    await sendNotification(userId, { type: 'follow', actor_id: req.user.id, content: `${req.user.username} started following you` });
     res.json({ message: 'Now following', isFollowing: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -411,7 +397,7 @@ app.get('/api/users/muted-keywords', auth, async (req, res) => {
   }
 });
 
-// ============ POSTS (with spam detection, content filtering, moderation, pinning) ============
+// ============ POSTS (with spam, content filter, moderation, pinning, reactions) ============
 app.get('/api/posts/feed', auth, async (req, res) => {
   try {
     const blockedUsers = await UserBlock.findAll({
@@ -447,7 +433,15 @@ app.get('/api/posts/feed', auth, async (req, res) => {
       });
     }
 
-    // Track view for each post (asynchronously, don't await)
+    // Add user reactions to each post
+    const userReactions = await PostReaction.findAll({
+      where: { user_id: req.user.id, post_id: { [Op.in]: posts.map(p => p.id) } },
+      attributes: ['post_id', 'type'],
+    });
+    const reactionMap = {};
+    userReactions.forEach(r => { reactionMap[r.post_id] = r.type; });
+    posts = posts.map(p => ({ ...p.toJSON(), userReaction: reactionMap[p.id] || null }));
+
     for (const post of posts) {
       PostView.create({ post_id: post.id, user_id: req.user.id }).catch(() => {});
     }
@@ -462,29 +456,18 @@ app.get('/api/posts/feed', auth, async (req, res) => {
 app.post('/api/posts', auth, async (req, res) => {
   try {
     const { content, visibility = 'public', media_urls = [], poll } = req.body;
-    if (!content || content.trim() === '') {
-      return res.status(400).json({ error: 'Content is required' });
-    }
+    if (!content || content.trim() === '') return res.status(400).json({ error: 'Content is required' });
 
-    // Spam detection
-    if (isRateLimited(req.user.id)) {
-      return res.status(429).json({ error: 'Too many posts. Please slow down.' });
-    }
+    // Spam
+    if (isRateLimited(req.user.id)) return res.status(429).json({ error: 'Too many posts. Please slow down.' });
     const spamCheck = checkSpam(content);
-    if (spamCheck.isSpam) {
-      return res.status(403).json({ error: `Spam detected: ${spamCheck.reason}` });
-    }
-    if (isDuplicatePost(req.user.id, content)) {
-      return res.status(409).json({ error: 'Duplicate post. Please wait before reposting.' });
-    }
+    if (spamCheck.isSpam) return res.status(403).json({ error: `Spam detected: ${spamCheck.reason}` });
+    if (isDuplicatePost(req.user.id, content)) return res.status(409).json({ error: 'Duplicate post. Please wait before reposting.' });
 
     // Content filtering (profanity, NSFW, custom blacklist)
     const filterResult = await filterContent(content);
-    if (filterResult.isViolation) {
-      return res.status(403).json({ error: `Content blocked: ${filterResult.reason}` });
-    }
+    if (filterResult.isViolation) return res.status(403).json({ error: `Content blocked: ${filterResult.reason}` });
 
-    // Hate speech moderation
     await moderateContent(req.user.id, 'post', content, ModerationLog);
 
     const post = await Post.create({
@@ -496,11 +479,9 @@ app.post('/api/posts', auth, async (req, res) => {
       comments_count: 0,
       shares_count: 0,
     });
-
-    // Record post for spam tracking
     recordPost(req.user.id, content);
 
-    // Handle hashtags
+    // Hashtags
     const hashtagRegex = /#(\w+)/g;
     const matches = content.match(hashtagRegex);
     if (matches) {
@@ -513,7 +494,7 @@ app.post('/api/posts', auth, async (req, res) => {
       }
     }
 
-    // Handle poll if provided
+    // Poll
     if (poll && poll.question && poll.options && poll.options.length >= 2) {
       const expiresAt = poll.expires_in
         ? (() => {
@@ -524,15 +505,8 @@ app.post('/api/posts', auth, async (req, res) => {
             return null;
           })()
         : null;
-      const dbPoll = await Poll.create({
-        post_id: post.id,
-        question: poll.question,
-        expires_at: expiresAt,
-        is_multiple_choice: poll.is_multiple_choice || false,
-      });
-      for (const opt of poll.options) {
-        if (opt.trim()) await PollOption.create({ poll_id: dbPoll.id, option_text: opt.trim() });
-      }
+      const dbPoll = await Poll.create({ post_id: post.id, question: poll.question, expires_at: expiresAt, is_multiple_choice: poll.is_multiple_choice || false });
+      for (const opt of poll.options) if (opt.trim()) await PollOption.create({ poll_id: dbPoll.id, option_text: opt.trim() });
     }
 
     await req.user.increment('posts_count');
@@ -541,32 +515,23 @@ app.post('/api/posts', auth, async (req, res) => {
     });
     res.status(201).json(postWithUser);
   } catch (error) {
-    if (error.message.includes('violates our community guidelines')) {
-      return res.status(403).json({ error: error.message });
-    }
+    if (error.message.includes('violates our community guidelines')) return res.status(403).json({ error: error.message });
     console.error('Post error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Share post
 app.post('/api/posts/:id/share', auth, async (req, res) => {
   try {
     const originalPost = await Post.findByPk(req.params.id);
-    if (!originalPost) return res.status(404).json({ error: 'Post not found' });
-    if (originalPost.is_deleted) return res.status(400).json({ error: 'Cannot share a deleted post' });
-
+    if (!originalPost || originalPost.is_deleted) return res.status(404).json({ error: 'Post not found or deleted' });
     const { comment } = req.body;
     if (comment && comment.length > 280) return res.status(400).json({ error: 'Share comment too long' });
     if (comment && comment.trim()) {
-      // Apply content filtering and moderation to share comment as well
       const filterResult = await filterContent(comment);
-      if (filterResult.isViolation) {
-        return res.status(403).json({ error: `Content blocked: ${filterResult.reason}` });
-      }
+      if (filterResult.isViolation) return res.status(403).json({ error: `Content blocked: ${filterResult.reason}` });
       await moderateContent(req.user.id, 'post', comment, ModerationLog);
     }
-
     const sharePost = await Post.create({
       user_id: req.user.id,
       content: comment || '',
@@ -575,21 +540,14 @@ app.post('/api/posts/:id/share', auth, async (req, res) => {
       visibility: 'public',
       media_urls: [],
     });
-
     await originalPost.increment('shares_count');
     await req.user.increment('posts_count');
-
     const shareWithDetails = await Post.findByPk(sharePost.id, {
       include: [
         { model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] },
-        {
-          model: Post,
-          as: 'original',
-          include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
-        },
+        { model: Post, as: 'original', include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] },
       ],
     });
-
     if (originalPost.user_id !== req.user.id) {
       await sendNotification(originalPost.user_id, {
         type: 'share',
@@ -601,12 +559,10 @@ app.post('/api/posts/:id/share', auth, async (req, res) => {
     res.status(201).json(shareWithDetails);
   } catch (error) {
     if (error.message.includes('violates our community guidelines')) return res.status(403).json({ error: error.message });
-    console.error('Share error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Edit post
 app.put('/api/posts/:id', auth, async (req, res) => {
   try {
     const { content, media_urls } = req.body;
@@ -626,7 +582,6 @@ app.put('/api/posts/:id', auth, async (req, res) => {
   }
 });
 
-// Delete post
 app.delete('/api/posts/:id', auth, async (req, res) => {
   try {
     const post = await Post.findByPk(req.params.id);
@@ -640,7 +595,6 @@ app.delete('/api/posts/:id', auth, async (req, res) => {
   }
 });
 
-// Like post
 app.post('/api/posts/:id/like', auth, async (req, res) => {
   try {
     const post = await Post.findByPk(req.params.id);
@@ -661,11 +615,10 @@ app.post('/api/posts/:id/like', auth, async (req, res) => {
   }
 });
 
-// Pin / Unpin post
 app.post('/api/posts/:id/pin', auth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { expires_in } = req.body; // '1d', '7d', '30d'
+    const { expires_in } = req.body;
     const post = await Post.findByPk(id);
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (post.user_id !== req.user.id) return res.status(403).json({ error: 'Unauthorized' });
@@ -673,11 +626,7 @@ app.post('/api/posts/:id/pin', auth, async (req, res) => {
     if (expires_in === '1d') expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     else if (expires_in === '7d') expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     else if (expires_in === '30d') expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    await post.update({
-      is_pinned: true,
-      pinned_at: new Date(),
-      pin_expires_at: expiresAt,
-    });
+    await post.update({ is_pinned: true, pinned_at: new Date(), pin_expires_at: expiresAt });
     res.json({ message: 'Post pinned successfully', post });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -697,30 +646,62 @@ app.delete('/api/posts/:id/pin', auth, async (req, res) => {
   }
 });
 
-// ============ COMMENTS (with spam detection, content filtering, moderation) ============
+// ============ POST REACTIONS ============
+app.post('/api/posts/:postId/reaction', auth, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const { type } = req.body;
+    const validTypes = ['like', 'laugh', 'shock', 'sad', 'angry'];
+    if (!validTypes.includes(type)) return res.status(400).json({ error: 'Invalid reaction type' });
+    const post = await Post.findByPk(postId);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    const existing = await PostReaction.findOne({ where: { user_id: req.user.id, post_id: postId, type } });
+    if (existing) {
+      await existing.destroy();
+      const current = post.reactions || { like: 0, laugh: 0, shock: 0, sad: 0, angry: 0 };
+      current[type] = Math.max((current[type] || 0) - 1, 0);
+      await post.update({ reactions: current });
+      res.json({ success: true, action: 'removed', type, counts: current });
+    } else {
+      await PostReaction.create({ user_id: req.user.id, post_id: postId, type });
+      const current = post.reactions || { like: 0, laugh: 0, shock: 0, sad: 0, angry: 0 };
+      current[type] = (current[type] || 0) + 1;
+      await post.update({ reactions: current });
+      res.json({ success: true, action: 'added', type, counts: current });
+    }
+  } catch (error) {
+    console.error('Reaction error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/posts/:postId/reactions', auth, async (req, res) => {
+  try {
+    const post = await Post.findByPk(req.params.postId, { attributes: ['reactions'] });
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    const userReaction = await PostReaction.findOne({ where: { user_id: req.user.id, post_id: req.params.postId }, attributes: ['type'] });
+    res.json({
+      counts: post.reactions || { like: 0, laugh: 0, shock: 0, sad: 0, angry: 0 },
+      userReaction: userReaction ? userReaction.type : null,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ COMMENTS (with spam, content filter, moderation) ============
 app.get('/api/posts/:postId/comments', auth, async (req, res) => {
   try {
-    const mutedKeywords = await UserMutedKeyword.findAll({
-      where: { user_id: req.user.id },
-      attributes: ['keyword'],
-    });
+    const mutedKeywords = await UserMutedKeyword.findAll({ where: { user_id: req.user.id }, attributes: ['keyword'] });
     const keywords = mutedKeywords.map((k) => k.keyword);
-
     let comments = await Comment.findAll({
       where: { post_id: req.params.postId, is_deleted: false, parent_comment_id: null },
       include: [
         { model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] },
-        {
-          model: Comment,
-          as: 'replies',
-          where: { is_deleted: false },
-          required: false,
-          include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
-        },
+        { model: Comment, as: 'replies', where: { is_deleted: false }, required: false, include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] },
       ],
       order: [['created_at', 'DESC']],
     });
-
     if (keywords.length) {
       const filterComment = (comment) => {
         const text = comment.content.toLowerCase();
@@ -735,7 +716,6 @@ app.get('/api/posts/:postId/comments', auth, async (req, res) => {
     }
     res.json({ comments });
   } catch (error) {
-    console.error('Get comments error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -745,58 +725,30 @@ app.post('/api/posts/:postId/comments', auth, async (req, res) => {
     const { postId } = req.params;
     const { content, parent_comment_id } = req.body;
     if (!content || content.trim() === '') return res.status(400).json({ error: 'Comment required' });
-
-    // Spam detection for comments
-    if (isRateLimited(req.user.id)) {
-      return res.status(429).json({ error: 'Too many comments. Please slow down.' });
-    }
+    if (isRateLimited(req.user.id)) return res.status(429).json({ error: 'Too many comments. Please slow down.' });
     const spamCheck = checkSpam(content);
-    if (spamCheck.isSpam) {
-      return res.status(403).json({ error: `Spam detected: ${spamCheck.reason}` });
-    }
-    if (isDuplicatePost(req.user.id, content)) {
-      return res.status(409).json({ error: 'Duplicate comment. Please wait.' });
-    }
-
-    // Content filtering (profanity, NSFW, custom blacklist)
+    if (spamCheck.isSpam) return res.status(403).json({ error: `Spam detected: ${spamCheck.reason}` });
+    if (isDuplicatePost(req.user.id, content)) return res.status(409).json({ error: 'Duplicate comment. Please wait.' });
     const filterResult = await filterContent(content);
-    if (filterResult.isViolation) {
-      return res.status(403).json({ error: `Content blocked: ${filterResult.reason}` });
-    }
-
-    // Hate speech moderation
+    if (filterResult.isViolation) return res.status(403).json({ error: `Content blocked: ${filterResult.reason}` });
     await moderateContent(req.user.id, 'comment', content, ModerationLog);
-
     const post = await Post.findByPk(postId);
     if (!post) return res.status(404).json({ error: 'Post not found' });
-
     const comment = await Comment.create({
-      user_id: req.user.id,
-      post_id: postId,
-      content: content.trim(),
-      parent_comment_id: parent_comment_id || null,
+      user_id: req.user.id, post_id: postId, content: content.trim(), parent_comment_id: parent_comment_id || null,
     });
     await post.increment('comments_count');
     if (post.user_id !== req.user.id) {
       await sendNotification(post.user_id, {
-        type: 'comment',
-        actor_id: req.user.id,
-        post_id: post.id,
-        comment_id: comment.id,
+        type: 'comment', actor_id: req.user.id, post_id: post.id, comment_id: comment.id,
         content: `${req.user.username} commented on your post`,
       });
     }
-    const withUser = await Comment.findByPk(comment.id, {
-      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
-    });
-    // Record comment for spam tracking
+    const withUser = await Comment.findByPk(comment.id, { include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] });
     recordPost(req.user.id, content);
     res.status(201).json(withUser);
   } catch (error) {
-    if (error.message.includes('violates our community guidelines')) {
-      return res.status(403).json({ error: error.message });
-    }
-    console.error('Create comment error:', error);
+    if (error.message.includes('violates our community guidelines')) return res.status(403).json({ error: error.message });
     res.status(500).json({ error: error.message });
   }
 });
@@ -813,11 +765,7 @@ app.delete('/api/comments/:commentId', auth, async (req, res) => {
 // ============ HASHTAGS ============
 app.get('/api/hashtags/trending', async (req, res) => {
   try {
-    const trending = await Hashtag.findAll({
-      attributes: ['tag', 'post_count'],
-      order: [['post_count', 'DESC']],
-      limit: 10,
-    });
+    const trending = await Hashtag.findAll({ attributes: ['tag', 'post_count'], order: [['post_count', 'DESC']], limit: 10 });
     res.json(trending);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -848,10 +796,7 @@ app.get('/api/search/posts', auth, async (req, res) => {
     if (!q || q.trim() === '') return res.json({ posts: [], count: 0 });
     const searchTerm = `%${q.trim().toLowerCase()}%`;
     const posts = await Post.findAll({
-      where: {
-        is_deleted: false,
-        [Op.or]: [sequelize.where(sequelize.fn('LOWER', sequelize.col('content')), 'LIKE', searchTerm)],
-      },
+      where: { is_deleted: false, [Op.or]: [sequelize.where(sequelize.fn('LOWER', sequelize.col('content')), 'LIKE', searchTerm)] },
       include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
       order: [['created_at', 'DESC']],
       limit: 50,
@@ -868,12 +813,7 @@ app.get('/api/search/users', auth, async (req, res) => {
     if (!q || q.trim() === '') return res.json({ users: [], count: 0 });
     const searchTerm = `%${q.trim().toLowerCase()}%`;
     const users = await User.findAll({
-      where: {
-        [Op.or]: [
-          sequelize.where(sequelize.fn('LOWER', sequelize.col('username')), 'LIKE', searchTerm),
-          sequelize.where(sequelize.fn('LOWER', sequelize.col('full_name')), 'LIKE', searchTerm),
-        ],
-      },
+      where: { [Op.or]: [sequelize.where(sequelize.fn('LOWER', sequelize.col('username')), 'LIKE', searchTerm), sequelize.where(sequelize.fn('LOWER', sequelize.col('full_name')), 'LIKE', searchTerm)] },
       attributes: ['id', 'username', 'full_name', 'avatar_url', 'bio'],
       limit: 30,
     });
@@ -891,18 +831,11 @@ app.get('/api/conversations', auth, async (req, res) => {
       include: [{ model: Message, as: 'messages', limit: 1, order: [['created_at', 'DESC']] }],
       order: [['last_message_at', 'DESC']],
     });
-    const enriched = await Promise.all(
-      conversations.map(async (conv) => {
-        const otherUserId = conv.participants.find((id) => id !== req.user.id);
-        const otherUser = await User.findByPk(otherUserId, { attributes: ['id', 'username', 'full_name', 'avatar_url'] });
-        return {
-          id: conv.id,
-          otherUser,
-          lastMessage: conv.messages?.[0]?.content || '',
-          lastMessageAt: conv.last_message_at,
-        };
-      })
-    );
+    const enriched = await Promise.all(conversations.map(async (conv) => {
+      const otherUserId = conv.participants.find((id) => id !== req.user.id);
+      const otherUser = await User.findByPk(otherUserId, { attributes: ['id', 'username', 'full_name', 'avatar_url'] });
+      return { id: conv.id, otherUser, lastMessage: conv.messages?.[0]?.content || '', lastMessageAt: conv.last_message_at };
+    }));
     res.json(enriched);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -913,18 +846,13 @@ app.get('/api/conversations/:conversationId/messages', auth, async (req, res) =>
   try {
     const { conversationId } = req.params;
     const conversation = await Conversation.findByPk(conversationId);
-    if (!conversation || !conversation.participants.includes(req.user.id)) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
+    if (!conversation || !conversation.participants.includes(req.user.id)) return res.status(403).json({ error: 'Not authorized' });
     const messages = await Message.findAll({
       where: { conversation_id: conversationId },
       include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
       order: [['created_at', 'ASC']],
     });
-    await Message.update(
-      { is_read: true, read_at: new Date() },
-      { where: { conversation_id: conversationId, sender_id: { [Op.ne]: req.user.id }, is_read: false } }
-    );
+    await Message.update({ is_read: true, read_at: new Date() }, { where: { conversation_id: conversationId, sender_id: { [Op.ne]: req.user.id }, is_read: false } });
     res.json(messages);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -937,12 +865,8 @@ app.post('/api/conversations', auth, async (req, res) => {
     if (!userId) return res.status(400).json({ error: 'User ID required' });
     const otherUser = await User.findByPk(userId);
     if (!otherUser) return res.status(404).json({ error: 'User not found' });
-    let conversation = await Conversation.findOne({
-      where: { participants: { [Op.contains]: [req.user.id, userId] } },
-    });
-    if (!conversation) {
-      conversation = await Conversation.create({ participants: [req.user.id, userId] });
-    }
+    let conversation = await Conversation.findOne({ where: { participants: { [Op.contains]: [req.user.id, userId] } } });
+    if (!conversation) conversation = await Conversation.create({ participants: [req.user.id, userId] });
     res.json(conversation);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -954,23 +878,12 @@ app.post('/api/messages', auth, async (req, res) => {
     const { conversationId, content } = req.body;
     if (!conversationId || !content.trim()) return res.status(400).json({ error: 'Invalid data' });
     const conversation = await Conversation.findByPk(conversationId);
-    if (!conversation || !conversation.participants.includes(req.user.id)) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-    // Optional: filter messages for profanity/NSFW
+    if (!conversation || !conversation.participants.includes(req.user.id)) return res.status(403).json({ error: 'Not authorized' });
     const filterResult = await filterContent(content);
-    if (filterResult.isViolation) {
-      return res.status(403).json({ error: `Message blocked: ${filterResult.reason}` });
-    }
-    const message = await Message.create({
-      conversation_id: conversationId,
-      sender_id: req.user.id,
-      content: content.trim(),
-    });
+    if (filterResult.isViolation) return res.status(403).json({ error: `Message blocked: ${filterResult.reason}` });
+    const message = await Message.create({ conversation_id: conversationId, sender_id: req.user.id, content: content.trim() });
     await conversation.update({ last_message: content.trim(), last_message_at: new Date() });
-    const populated = await Message.findByPk(message.id, {
-      include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
-    });
+    const populated = await Message.findByPk(message.id, { include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] });
     const recipientId = conversation.participants.find((id) => id !== req.user.id);
     const recipientSocket = userSockets.get(recipientId);
     if (recipientSocket) io.to(recipientSocket).emit('new_message', populated);
@@ -1013,12 +926,11 @@ app.post('/api/polls/:pollId/vote', auth, async (req, res) => {
     for (const optId of optionIds) await PollOption.increment('vote_count', { where: { id: optId } });
     await poll.increment('total_votes', { by: optionIds.length });
     const updatedPoll = await Poll.findByPk(pollId, { include: [{ model: PollOption, as: 'options' }] });
-    // Emit real‑time update
     const post = await Post.findByPk(poll.post_id);
     if (post) {
       const viewers = [post.user_id];
-      for (const userId of viewers) {
-        const socketId = userSockets.get(userId);
+      for (const uid of viewers) {
+        const socketId = userSockets.get(uid);
         if (socketId) io.to(socketId).emit('poll_update', { pollId, poll: updatedPoll });
       }
     }
@@ -1042,10 +954,9 @@ app.get('/api/polls/:pollId/results', auth, async (req, res) => {
 // ============ ANALYTICS ============
 app.post('/api/posts/:postId/view', auth, async (req, res) => {
   try {
-    const { postId } = req.params;
-    const post = await Post.findByPk(postId);
+    const post = await Post.findByPk(req.params.postId);
     if (!post) return res.status(404).json({ error: 'Post not found' });
-    await PostView.create({ post_id: postId, user_id: req.user.id });
+    await PostView.create({ post_id: req.params.postId, user_id: req.user.id });
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1054,11 +965,10 @@ app.post('/api/posts/:postId/view', auth, async (req, res) => {
 
 app.get('/api/posts/:postId/analytics', auth, async (req, res) => {
   try {
-    const { postId } = req.params;
-    const post = await Post.findByPk(postId);
+    const post = await Post.findByPk(req.params.postId);
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (post.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
-    const viewCount = await PostView.count({ where: { post_id: postId } });
+    const viewCount = await PostView.count({ where: { post_id: req.params.postId } });
     const engagement = {
       likes: post.likes_count,
       comments: post.comments_count,
@@ -1066,7 +976,7 @@ app.get('/api/posts/:postId/analytics', auth, async (req, res) => {
       total_engagement: post.likes_count + post.comments_count + post.shares_count,
       engagement_rate: viewCount > 0 ? ((post.likes_count + post.comments_count + post.shares_count) / viewCount) * 100 : 0,
     };
-    res.json({ post_id: postId, content: post.content, created_at: post.created_at, views: viewCount, engagement });
+    res.json({ post_id: post.id, content: post.content, created_at: post.created_at, views: viewCount, engagement });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1075,14 +985,8 @@ app.get('/api/posts/:postId/analytics', auth, async (req, res) => {
 app.get('/api/users/analytics', auth, async (req, res) => {
   try {
     const userId = req.user.id;
-    const followerHistory = await FollowerHistory.findAll({
-      where: { user_id: userId },
-      order: [['recorded_at', 'ASC']],
-    });
-    const posts = await Post.findAll({
-      where: { user_id: userId, is_deleted: false },
-      attributes: ['created_at', 'likes_count', 'comments_count', 'shares_count'],
-    });
+    const followerHistory = await FollowerHistory.findAll({ where: { user_id: userId }, order: [['recorded_at', 'ASC']] });
+    const posts = await Post.findAll({ where: { user_id: userId, is_deleted: false }, attributes: ['created_at', 'likes_count', 'comments_count', 'shares_count'] });
     const hourlyEngagement = Array(24).fill(0);
     const hourlyCounts = Array(24).fill(0);
     const dailyEngagement = Array(7).fill(0);
@@ -1094,18 +998,9 @@ app.get('/api/users/analytics', auth, async (req, res) => {
       hourlyCounts[hour] += 1;
       dailyEngagement[day] += engagement;
     });
-    const bestHours = hourlyEngagement
-      .map((total, i) => ({ hour: i, avgEngagement: hourlyCounts[i] ? total / hourlyCounts[i] : 0 }))
-      .sort((a, b) => b.avgEngagement - a.avgEngagement)
-      .slice(0, 3);
-    const bestDays = dailyEngagement
-      .map((total, i) => ({ day: i, totalEngagement: total }))
-      .sort((a, b) => b.totalEngagement - a.totalEngagement)
-      .slice(0, 2);
-    res.json({
-      follower_growth: followerHistory.map((entry) => ({ date: entry.recorded_at, count: entry.count })),
-      best_times: { hours: bestHours, days: bestDays },
-    });
+    const bestHours = hourlyEngagement.map((total, i) => ({ hour: i, avgEngagement: hourlyCounts[i] ? total / hourlyCounts[i] : 0 })).sort((a, b) => b.avgEngagement - a.avgEngagement).slice(0, 3);
+    const bestDays = dailyEngagement.map((total, i) => ({ day: i, totalEngagement: total })).sort((a, b) => b.totalEngagement - a.totalEngagement).slice(0, 2);
+    res.json({ follower_growth: followerHistory.map((entry) => ({ date: entry.recorded_at, count: entry.count })), best_times: { hours: bestHours, days: bestDays } });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1114,9 +1009,7 @@ app.get('/api/users/analytics', auth, async (req, res) => {
 app.post('/api/users/record-followers', auth, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
   const users = await User.findAll({ attributes: ['id', 'followers_count'] });
-  for (const user of users) {
-    await FollowerHistory.create({ user_id: user.id, count: user.followers_count, recorded_at: new Date() });
-  }
+  for (const user of users) await FollowerHistory.create({ user_id: user.id, count: user.followers_count, recorded_at: new Date() });
   res.json({ message: 'Follower history recorded' });
 });
 
@@ -1126,13 +1019,11 @@ app.post('/api/upload', auth, upload.single('image'), async (req, res) => {
   const result = await uploadToCloudinary(req.file.buffer);
   res.json({ success: true, url: result.secure_url, public_id: result.public_id });
 });
-
 app.post('/api/upload/multiple', auth, upload.array('images', 4), async (req, res) => {
   if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No files' });
   const results = await Promise.all(req.files.map((f) => uploadToCloudinary(f.buffer)));
   res.json({ success: true, images: results.map((r) => ({ url: r.secure_url, public_id: r.public_id })) });
 });
-
 app.delete('/api/upload/:publicId', auth, async (req, res) => {
   await deleteFromCloudinary(req.params.publicId);
   res.json({ success: true });
@@ -1140,21 +1031,15 @@ app.delete('/api/upload/:publicId', auth, async (req, res) => {
 
 // ============ NOTIFICATIONS ============
 app.get('/api/notifications', auth, async (req, res) => {
-  const notifs = await Notification.findAll({
-    where: { user_id: req.user.id },
-    order: [['created_at', 'DESC']],
-    limit: 50,
-  });
+  const notifs = await Notification.findAll({ where: { user_id: req.user.id }, order: [['created_at', 'DESC']], limit: 50 });
   res.json(notifs);
 });
-
 app.put('/api/notifications/:id/read', auth, async (req, res) => {
   const notif = await Notification.findOne({ where: { id: req.params.id, user_id: req.user.id } });
   if (!notif) return res.status(404).json({ error: 'Not found' });
   await notif.update({ is_read: true, read_at: new Date() });
   res.json({ message: 'Marked read' });
 });
-
 app.put('/api/notifications/read-all', auth, async (req, res) => {
   await Notification.update({ is_read: true, read_at: new Date() }, { where: { user_id: req.user.id, is_read: false } });
   res.json({ message: 'All marked read' });
@@ -1166,7 +1051,6 @@ app.get('/api/admin/moderation-logs', auth, async (req, res) => {
   const logs = await ModerationLog.findAll({ order: [['created_at', 'DESC']], limit: 100 });
   res.json(logs);
 });
-
 app.put('/api/admin/moderation-logs/:id/review', auth, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
   const log = await ModerationLog.findByPk(req.params.id);
@@ -1174,14 +1058,11 @@ app.put('/api/admin/moderation-logs/:id/review', auth, async (req, res) => {
   await log.update({ is_reviewed: true, reviewed_by: req.user.id });
   res.json({ message: 'Reviewed' });
 });
-
-// Blacklist management (admin only)
 app.get('/api/admin/blacklist', auth, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
   const keywords = await listBlacklistKeywords();
   res.json({ keywords });
 });
-
 app.post('/api/admin/blacklist', auth, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
   const { keyword, category } = req.body;
@@ -1189,7 +1070,6 @@ app.post('/api/admin/blacklist', auth, async (req, res) => {
   await addBlacklistKeyword(keyword, category || 'custom', req.user.id);
   res.json({ message: 'Keyword added to blacklist' });
 });
-
 app.delete('/api/admin/blacklist/:keyword', auth, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
   const { keyword } = req.params;
@@ -1204,136 +1084,6 @@ app.get('/api/sync-db', async (req, res) => {
     res.json({ message: '✅ Database synced successfully!' });
   } catch (error) {
     console.error('Sync error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============ POST REACTIONS ============
-
-// Toggle reaction on a post
-app.post('/api/posts/:postId/reaction', auth, async (req, res) => {
-  try {
-    const { postId } = req.params;
-    const { type } = req.body; // 'like', 'laugh', 'shock', 'sad', 'angry'
-    const validTypes = ['like', 'laugh', 'shock', 'sad', 'angry'];
-    if (!validTypes.includes(type)) {
-      return res.status(400).json({ error: 'Invalid reaction type' });
-    }
-
-    const post = await Post.findByPk(postId);
-    if (!post) return res.status(404).json({ error: 'Post not found' });
-
-    const existing = await PostReaction.findOne({
-      where: { user_id: req.user.id, post_id: postId, type },
-    });
-
-    if (existing) {
-      // Remove reaction
-      await existing.destroy();
-      // Decrement the count in post.reactions JSON
-      const current = post.reactions || { like: 0, laugh: 0, shock: 0, sad: 0, angry: 0 };
-      current[type] = Math.max((current[type] || 0) - 1, 0);
-      await post.update({ reactions: current });
-      res.json({ success: true, action: 'removed', type, counts: current });
-    } else {
-      // Add new reaction
-      await PostReaction.create({
-        user_id: req.user.id,
-        post_id: postId,
-        type,
-      });
-      // Increment count
-      const current = post.reactions || { like: 0, laugh: 0, shock: 0, sad: 0, angry: 0 };
-      current[type] = (current[type] || 0) + 1;
-      await post.update({ reactions: current });
-      // If user had a different reaction previously, we could optionally remove it? For now, allow multiple.
-      res.json({ success: true, action: 'added', type, counts: current });
-    }
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get reactions for a post (optional)
-app.get('/api/posts/:postId/reactions', auth, async (req, res) => {
-  try {
-    const post = await Post.findByPk(req.params.postId, {
-      attributes: ['reactions'],
-    });
-    if (!post) return res.status(404).json({ error: 'Post not found' });
-    const userReaction = await PostReaction.findOne({
-      where: { user_id: req.user.id, post_id: req.params.postId },
-      attributes: ['type'],
-    });
-    res.json({
-      counts: post.reactions || { like: 0, laugh: 0, shock: 0, sad: 0, angry: 0 },
-      userReaction: userReaction ? userReaction.type : null,
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-const userReactions = await PostReaction.findAll({
-  where: { user_id: req.user.id, post_id: { [Op.in]: posts.map(p => p.id) } },
-  attributes: ['post_id', 'type'],
-});
-const reactionMap = {};
-userReactions.forEach(r => { reactionMap[r.post_id] = r.type; });
-posts = posts.map(p => ({ ...p.toJSON(), userReaction: reactionMap[p.id] || null }));
-
-app.get('/api/posts/feed', auth, async (req, res) => {
-  try {
-    const blockedUsers = await UserBlock.findAll({
-      where: { blocker_id: req.user.id, type: 'block' },
-      attributes: ['blocked_id'],
-    });
-    const blockedIds = blockedUsers.map((b) => b.blocked_id);
-
-    const mutedKeywords = await UserMutedKeyword.findAll({
-      where: { user_id: req.user.id },
-      attributes: ['keyword'],
-    });
-    const keywords = mutedKeywords.map((k) => k.keyword);
-
-    let posts = await Post.findAll({
-      where: { is_deleted: false, user_id: { [Op.notIn]: blockedIds } },
-      include: [
-        { model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] },
-        {
-          model: Post,
-          as: 'original',
-          include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
-        },
-      ],
-      order: [['created_at', 'DESC']],
-      limit: 100,
-    });
-
-    if (keywords.length) {
-      posts = posts.filter((post) => {
-        const text = (post.content + ' ' + (post.original?.content || '')).toLowerCase();
-        return !keywords.some((kw) => text.includes(kw));
-      });
-    }
-
-    // ---- ADD USER REACTIONS (inside the async function) ----
-    const userReactions = await PostReaction.findAll({
-      where: { user_id: req.user.id, post_id: { [Op.in]: posts.map(p => p.id) } },
-      attributes: ['post_id', 'type'],
-    });
-    const reactionMap = {};
-    userReactions.forEach(r => { reactionMap[r.post_id] = r.type; });
-    posts = posts.map(p => ({ ...p.toJSON(), userReaction: reactionMap[p.id] || null }));
-
-    // Track view for each post (asynchronously, don't await)
-    for (const post of posts) {
-      PostView.create({ post_id: post.id, user_id: req.user.id }).catch(() => {});
-    }
-
-    res.json({ posts, count: posts.length });
-  } catch (error) {
-    console.error('Feed error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1354,12 +1104,7 @@ const startServer = async () => {
     console.log('✅ Database connected');
     await sequelize.sync({ alter: true });
     console.log('✅ Database synced');
-
-    // Cleanup spam detection data every hour
-    setInterval(() => {
-      cleanup();
-    }, 60 * 60 * 1000);
-
+    setInterval(() => cleanup(), 60 * 60 * 1000);
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`\n🚀 Server on http://0.0.0.0:${PORT}`);
       console.log(`📝 Health: http://localhost:${PORT}/health`);
