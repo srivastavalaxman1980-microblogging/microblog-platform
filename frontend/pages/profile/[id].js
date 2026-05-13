@@ -248,23 +248,64 @@ export default function ProfilePage({ user: currentUser, isAuthenticated }) {
             </div>
             
             {/* Action Buttons */}
-            <div className="mt-4 md:mt-0 flex flex-wrap gap-2">
-              {isOwnProfile ? (
-                <button
-                  onClick={() => {
-                    setIsEditing(true);
-                    setEditForm({
-                      full_name: profile.full_name || '',
-                      bio: profile.bio || '',
-                      location: profile.location || '',
-                      website: profile.website || '',
-                      avatar_url: profile.avatar_url || ''
-                    });
-                  }}
-                  className="border border-red-500 text-red-500 px-4 py-2 rounded-full hover:bg-red-500 hover:text-white transition"
-                >
-                  Edit Profile
-                </button>
+<div className="mt-4 md:mt-0 flex flex-wrap justify-start items-center gap-2">
+  {isOwnProfile ? (
+    <button
+      onClick={() => {
+        setIsEditing(true);
+        setEditForm({
+          full_name: profile.full_name || '',
+          bio: profile.bio || '',
+          location: profile.location || '',
+          website: profile.website || '',
+          avatar_url: profile.avatar_url || ''
+        });
+      }}
+      className="border border-red-500 text-red-500 px-4 py-2 rounded-full hover:bg-red-500 hover:text-white transition text-sm sm:text-base"
+    >
+      Edit Profile
+    </button>
+  ) : (
+    <>
+      <button
+        onClick={handleFollow}
+        className={`px-4 py-2 rounded-full transition text-sm sm:text-base ${
+          isFollowing
+            ? 'border border-red-500 text-red-500 hover:bg-red-500 hover:text-white'
+            : 'bg-red-500 text-white hover:bg-red-600'
+        }`}
+      >
+        {isFollowing ? 'Unfollow' : 'Follow'}
+      </button>
+      <button
+        onClick={startConversation}
+        className="border border-red-500 text-red-500 px-4 py-2 rounded-full hover:bg-red-500 hover:text-white transition flex items-center gap-1 text-sm sm:text-base"
+      >
+        <FiMessageSquare className="text-base sm:text-lg" /> Message
+      </button>
+      <button
+        onClick={isBlocked ? handleUnblock : handleBlock}
+        className={`px-4 py-2 rounded-full transition text-sm sm:text-base ${
+          isBlocked
+            ? 'border border-green-500 text-green-500 hover:bg-green-500 hover:text-white'
+            : 'border border-red-500 text-red-500 hover:bg-red-500 hover:text-white'
+        }`}
+      >
+        {isBlocked ? 'Unblock' : 'Block'}
+      </button>
+      <button
+        onClick={isMuted ? handleUnmute : handleMute}
+        className={`px-4 py-2 rounded-full transition text-sm sm:text-base ${
+          isMuted
+            ? 'border border-yellow-500 text-yellow-500 hover:bg-yellow-500 hover:text-white'
+            : 'border border-yellow-500 text-yellow-500 hover:bg-yellow-500 hover:text-white'
+        }`}
+      >
+        {isMuted ? 'Unmute' : 'Mute'}
+      </button>
+    </>
+  )}
+</div>
               ) : (
                 <>
                   <button
