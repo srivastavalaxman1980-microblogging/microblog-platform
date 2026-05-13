@@ -57,6 +57,7 @@ const UserMutedKeyword = require('./UserMutedKeyword')(sequelize);
 const PostView = require('./PostView')(sequelize);
 const FollowerHistory = require('./FollowerHistory')(sequelize);
 const BlacklistEntry = require('./BlacklistEntry')(sequelize);
+const PostReaction = require('./PostReaction')(sequelize);
 
 // ========== ASSOCIATIONS ==========
 
@@ -87,6 +88,9 @@ Post.belongsTo(Post, { as: 'original', foreignKey: 'shared_from' });
 Post.hasMany(Post, { as: 'shares', foreignKey: 'shared_from' });
 Post.hasMany(PostView, { foreignKey: 'post_id', as: 'views' });
 PostView.belongsTo(Post, { foreignKey: 'post_id', as: 'post' });
+Post.hasMany(PostReaction, { foreignKey: 'post_id', as: 'reactionsList' });
+PostReaction.belongsTo(Post, { foreignKey: 'post_id', as: 'post' });
+PostReaction.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
 
 // ---- Comment ----
@@ -168,4 +172,5 @@ module.exports = {
   PostView,
   FollowerHistory,
   BlacklistEntry,
+  PostReaction,
 };

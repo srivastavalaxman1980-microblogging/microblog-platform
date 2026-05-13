@@ -51,6 +51,16 @@ module.exports = (sequelize) => {
       type: DataTypes.TEXT,
       allowNull: true,
     },
+	reactions: {
+      type: DataTypes.JSONB,
+      defaultValue: {
+      like: 0,
+      laugh: 0,
+      shock: 0,
+      sad: 0,
+      angry: 0,
+    },
+
     // 🔽 NEW PIN FIELDS 🔽
     is_pinned: {
       type: DataTypes.BOOLEAN,
