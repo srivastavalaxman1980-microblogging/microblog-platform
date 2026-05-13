@@ -70,4 +70,9 @@ router.get('/:id/following', authMiddleware, async (req, res) => {
   }
 });
 
+push_subscription: {
+  type: DataTypes.JSONB,
+  allowNull: true,
+},
+
 module.exports = router;

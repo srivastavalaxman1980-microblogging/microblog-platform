@@ -6,6 +6,7 @@ const socketIo = require('socket.io');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { Op } = require('sequelize');
+const webpush = require('web-push');
 const {
   sequelize,
   User,
@@ -48,6 +49,13 @@ const {
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
+
+// ==================== WEB PUSH (VAPID) ====================
+webpush.setVapidDetails(
+  'mailto:admin@aureon.com',
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
 
 // ============ CORS ============
 const allowedOrigins = [
@@ -113,6 +121,22 @@ io.on('connection', (socket) => {
   });
 });
 
+// ==================== PUSH NOTIFICATION HELPER ====================
+const sendPushNotification = async (userId, title, body, url = '/') => {
+  try {
+    const user = await User.findByPk(userId);
+    if (user && user.push_subscription) {
+      await webpush.sendNotification(
+        user.push_subscription,
+        JSON.stringify({ title, body, url, icon: '/icons/icon-192x192.png' })
+      );
+    }
+  } catch (error) {
+    console.error('Push notification failed:', error);
+  }
+};
+
+// Enhanced socket + DB + push notification sender
 const sendNotification = async (userId, notification) => {
   const socketId = userSockets.get(userId);
   if (socketId) io.to(socketId).emit('notification', notification);
@@ -124,6 +148,8 @@ const sendNotification = async (userId, notification) => {
     comment_id: notification.comment_id,
     content: notification.content,
   });
+  // Also send push notification (if user has subscription)
+  await sendPushNotification(userId, 'Aureon', notification.content, `/post/${notification.post_id}`);
 };
 
 // ============ ENVIRONMENT DEBUG ============
@@ -141,6 +167,7 @@ if (process.env.DATABASE_URL) {
 }
 console.log('JWT_SECRET exists:', !!process.env.JWT_SECRET);
 console.log('Cloudinary configured:', !!process.env.CLOUDINARY_CLOUD_NAME);
+console.log('VAPID keys configured:', !!process.env.VAPID_PUBLIC_KEY && !!process.env.VAPID_PRIVATE_KEY);
 console.log('========================\n');
 
 // ============ HEALTH & ROOT ============
@@ -148,7 +175,7 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString(), port: PORT });
 });
 app.get('/', (req, res) => {
-  res.json({ message: 'Aureon API', version: '3.1.0' });
+  res.json({ message: 'Aureon API', version: '3.2.0' });
 });
 
 // ============ AUTH MIDDLEWARE ============
@@ -282,7 +309,11 @@ app.post('/api/users/:userId/follow', auth, async (req, res) => {
     await Follower.upsert({ follower_id: req.user.id, following_id: userId, status: 'accepted' });
     await target.increment('followers_count');
     await User.increment('following_count', { where: { id: req.user.id } });
-    await sendNotification(userId, { type: 'follow', actor_id: req.user.id, content: `${req.user.username} started following you` });
+    await sendNotification(userId, {
+      type: 'follow',
+      actor_id: req.user.id,
+      content: `${req.user.username} started following you`,
+    });
     res.json({ message: 'Now following', isFollowing: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -393,6 +424,17 @@ app.get('/api/users/muted-keywords', auth, async (req, res) => {
       order: [['keyword', 'ASC']],
     });
     res.json(keywords.map((k) => k.keyword));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ PUSH SUBSCRIPTION ============
+app.post('/api/push/subscribe', auth, async (req, res) => {
+  try {
+    const { subscription } = req.body;
+    await User.update({ push_subscription: subscription }, { where: { id: req.user.id } });
+    res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

@@ -3,14 +3,23 @@ const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
   images: {
-    domains: [
-      'localhost',
-      'microblog-backend.onrender.com',
-      'via.placeholder.com'
-    ],
+    domains: ['localhost', 'microblog-backend-1jv9.onrender.com', 'via.placeholder.com', 'res.cloudinary.com'],
   },
   env: {
     API_URL: process.env.API_URL || 'http://localhost:5000/api',
+    NEXT_PUBLIC_VAPID_PUBLIC_KEY: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
+  },
+  async headers() {
+    return [
+      {
+        source: '/sw.js',
+        headers: [{ key: 'Service-Worker-Allowed', value: '/' }],
+      },
+      {
+        source: '/manifest.json',
+        headers: [{ key: 'Content-Type', value: 'application/json' }],
+      },
+    ];
   },
   async rewrites() {
     return [
@@ -21,6 +30,6 @@ const nextConfig = {
     ];
   },
   output: 'standalone',
-}
+};
 
-module.exports = nextConfig
+module.exports = nextConfig;
