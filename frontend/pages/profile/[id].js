@@ -378,9 +378,13 @@ export default function ProfilePage({ user: currentUser, isAuthenticated }) {
               posts.map((post) => (
                 <div key={post.id} className="bg-gray-900 rounded-xl border border-gray-800 p-4">
                   <p className="text-gray-200">{post.content}</p>
-				  {post.is_pinned && (
-                <span className="ml-2 text-xs bg-red-500 text-white px-2 py-0.5 rounded-full">Pinned</span>
-            )}
+                  {post.media_urls && post.media_urls.length > 0 && (
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      {post.media_urls.map((url, idx) => (
+                        <img key={idx} src={url} className="rounded w-full h-32 object-cover" alt="media" />
+                      ))}
+                    </div>
+                  )}
                   <div className="flex items-center space-x-4 mt-3 text-sm text-gray-500">
                     <span>❤️ {post.likes_count || 0}</span>
                     <span>💬 {post.comments_count || 0}</span>
