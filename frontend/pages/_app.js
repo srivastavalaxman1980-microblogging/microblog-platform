@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import Head from 'next/head';
 import '../styles/globals.css';
-import { useEffect } from 'react';
 import PWAInstallPrompt from '../components/PWAInstallPrompt';
 
 function MyApp({ Component, pageProps }) {
