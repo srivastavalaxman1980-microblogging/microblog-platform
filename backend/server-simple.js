@@ -1088,6 +1088,117 @@ app.get('/api/sync-db', async (req, res) => {
   }
 });
 
+// ============ DATA EXPORT / IMPORT ============
+const archiver = require('archiver'); // npm install archiver
+const fs = require('fs');
+const path = require('path');
+
+// Helper to collect user data
+const collectUserData = async (userId) => {
+  const user = await User.findByPk(userId, { attributes: { exclude: ['password_hash'] } });
+  const posts = await Post.findAll({ where: { user_id: userId, is_deleted: false }, order: [['created_at', 'ASC']] });
+  const comments = await Comment.findAll({ where: { user_id: userId, is_deleted: false }, order: [['created_at', 'ASC']] });
+  const likes = await Like.findAll({ where: { user_id: userId }, include: [{ model: Post, as: 'post', attributes: ['id'] }] });
+  const followers = await Follower.findAll({ where: { following_id: userId, status: 'accepted' }, include: [{ model: User, as: 'follower', attributes: ['id', 'username'] }] });
+  const following = await Follower.findAll({ where: { follower_id: userId, status: 'accepted' }, include: [{ model: User, as: 'following', attributes: ['id', 'username'] }] });
+  const conversations = await Conversation.findAll({ where: { participants: { [Op.contains]: [userId] } } });
+  return {
+    user,
+    posts,
+    comments,
+    likes: likes.map(l => ({ post_id: l.post_id, created_at: l.created_at })),
+    followers: followers.map(f => f.follower),
+    following: following.map(f => f.following),
+    conversations: conversations.map(c => c.id),
+    export_date: new Date().toISOString(),
+  };
+};
+
+// Export user data as JSON (download)
+app.get('/api/user/export', auth, async (req, res) => {
+  try {
+    const data = await collectUserData(req.user.id);
+    // Log export
+    await ExportLog.create({ user_id: req.user.id, type: 'export', status: 'success', details: { recordCount: data.posts.length } });
+    res.setHeader('Content-Disposition', `attachment; filename=aureon-export-${req.user.id}-${Date.now()}.json`);
+    res.setHeader('Content-Type', 'application/json');
+    res.json(data);
+  } catch (error) {
+    console.error('Export error:', error);
+    res.status(500).json({ error: 'Export failed' });
+  }
+});
+
+// Import data from uploaded JSON (overwrites existing? we'll create new posts/comments to avoid duplicates)
+app.post('/api/user/import', auth, upload.single('importFile'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const fileContent = req.file.buffer.toString('utf8');
+    const importedData = JSON.parse(fileContent);
+    // Validate structure (basic)
+    if (!importedData.user || !importedData.posts) throw new Error('Invalid file format');
+    // We only add new posts/comments, not overwrite existing user profile (for safety)
+    let postsAdded = 0, commentsAdded = 0;
+    for (const post of importedData.posts) {
+      const existing = await Post.findOne({ where: { user_id: req.user.id, content: post.content, created_at: post.created_at } });
+      if (!existing) {
+        await Post.create({
+          user_id: req.user.id,
+          content: post.content,
+          media_urls: post.media_urls || [],
+          visibility: post.visibility || 'public',
+          created_at: post.created_at,
+          updated_at: post.updated_at,
+        });
+        postsAdded++;
+      }
+    }
+    for (const comment of importedData.comments) {
+      const existing = await Comment.findOne({ where: { user_id: req.user.id, content: comment.content, post_id: comment.post_id, created_at: comment.created_at } });
+      if (!existing) {
+        await Comment.create({
+          user_id: req.user.id,
+          post_id: comment.post_id,
+          content: comment.content,
+          parent_comment_id: comment.parent_comment_id || null,
+          created_at: comment.created_at,
+        });
+        commentsAdded++;
+      }
+    }
+    await ExportLog.create({ user_id: req.user.id, type: 'import', status: 'success', details: { postsAdded, commentsAdded } });
+    res.json({ message: `Import completed: ${postsAdded} posts, ${commentsAdded} comments added` });
+  } catch (error) {
+    console.error('Import error:', error);
+    res.status(500).json({ error: 'Import failed: ' + error.message });
+  }
+});
+
+// Admin: full database backup (zip)
+app.get('/api/admin/backup', auth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  try {
+    const tables = ['users', 'posts', 'comments', 'followers', 'messages', 'conversations', 'hashtags', 'post_hashtags', 'likes', 'notifications', 'reports', 'moderation_logs'];
+    const backupData = {};
+    for (const table of tables) {
+      const [results] = await sequelize.query(`SELECT * FROM ${table};`);
+      backupData[table] = results;
+    }
+    res.setHeader('Content-Disposition', `attachment; filename=aureon-backup-${Date.now()}.json`);
+    res.setHeader('Content-Type', 'application/json');
+    res.json(backupData);
+  } catch (error) {
+    console.error('Backup error:', error);
+    res.status(500).json({ error: 'Backup failed' });
+  }
+});
+
+// Twitter import placeholder (requires OAuth)
+app.post('/api/user/import-twitter', auth, async (req, res) => {
+  // This would need Twitter API integration – for now, placeholder
+  res.status(501).json({ error: 'Twitter import not yet implemented' });
+});
+
 // ============ 404 & ERROR HANDLERS ============
 app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });

@@ -58,6 +58,7 @@ const PostView = require('./PostView')(sequelize);
 const FollowerHistory = require('./FollowerHistory')(sequelize);
 const BlacklistEntry = require('./BlacklistEntry')(sequelize);
 const PostReaction = require('./PostReaction')(sequelize);
+const ExportLog = require('./ExportLog')(sequelize);
 
 // ========== ASSOCIATIONS ==========
 
@@ -173,4 +174,5 @@ module.exports = {
   FollowerHistory,
   BlacklistEntry,
   PostReaction,
+  ExportLog,
 };

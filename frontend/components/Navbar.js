@@ -52,6 +52,10 @@ export default function Navbar({ currentUser }) {
             <FiBarChart2 className="text-xl" />
             <span>Analytics</span>
             </Link>
+			<Link href="/settings/data" className="text-gray-300 hover:text-red-500 transition flex items-center space-x-2">
+            <span>📂</span>
+            <span>Data</span>
+            </Link>
             <button onClick={handleLogout} className="text-gray-300 hover:text-red-500 transition flex items-center space-x-2">
               <FiLogOut className="text-xl" />
               <span>Logout</span>
