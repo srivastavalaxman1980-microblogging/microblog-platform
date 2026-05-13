@@ -26,6 +26,7 @@ const {
   PostView,
   FollowerHistory,
   BlacklistEntry,
+  PostReaction,
 } = require('./models');
 const { upload, uploadToCloudinary, deleteFromCloudinary } = require('./middleware/upload');
 const { moderateContent } = require('./utils/moderation');
@@ -46,6 +47,7 @@ const {
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
+
 
 // ============ CORS ============
 const allowedOrigins = [
@@ -1205,6 +1207,80 @@ app.get('/api/sync-db', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// ============ POST REACTIONS ============
+
+// Toggle reaction on a post
+app.post('/api/posts/:postId/reaction', auth, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const { type } = req.body; // 'like', 'laugh', 'shock', 'sad', 'angry'
+    const validTypes = ['like', 'laugh', 'shock', 'sad', 'angry'];
+    if (!validTypes.includes(type)) {
+      return res.status(400).json({ error: 'Invalid reaction type' });
+    }
+
+    const post = await Post.findByPk(postId);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+
+    const existing = await PostReaction.findOne({
+      where: { user_id: req.user.id, post_id: postId, type },
+    });
+
+    if (existing) {
+      // Remove reaction
+      await existing.destroy();
+      // Decrement the count in post.reactions JSON
+      const current = post.reactions || { like: 0, laugh: 0, shock: 0, sad: 0, angry: 0 };
+      current[type] = Math.max((current[type] || 0) - 1, 0);
+      await post.update({ reactions: current });
+      res.json({ success: true, action: 'removed', type, counts: current });
+    } else {
+      // Add new reaction
+      await PostReaction.create({
+        user_id: req.user.id,
+        post_id: postId,
+        type,
+      });
+      // Increment count
+      const current = post.reactions || { like: 0, laugh: 0, shock: 0, sad: 0, angry: 0 };
+      current[type] = (current[type] || 0) + 1;
+      await post.update({ reactions: current });
+      // If user had a different reaction previously, we could optionally remove it? For now, allow multiple.
+      res.json({ success: true, action: 'added', type, counts: current });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get reactions for a post (optional)
+app.get('/api/posts/:postId/reactions', auth, async (req, res) => {
+  try {
+    const post = await Post.findByPk(req.params.postId, {
+      attributes: ['reactions'],
+    });
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    const userReaction = await PostReaction.findOne({
+      where: { user_id: req.user.id, post_id: req.params.postId },
+      attributes: ['type'],
+    });
+    res.json({
+      counts: post.reactions || { like: 0, laugh: 0, shock: 0, sad: 0, angry: 0 },
+      userReaction: userReaction ? userReaction.type : null,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const userReactions = await PostReaction.findAll({
+  where: { user_id: req.user.id, post_id: { [Op.in]: posts.map(p => p.id) } },
+  attributes: ['post_id', 'type'],
+});
+const reactionMap = {};
+userReactions.forEach(r => { reactionMap[r.post_id] = r.type; });
+posts = posts.map(p => ({ ...p.toJSON(), userReaction: reactionMap[p.id] || null }));
 
 // ============ 404 & ERROR HANDLERS ============
 app.use((req, res) => {
