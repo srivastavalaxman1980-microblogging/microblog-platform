@@ -742,4 +742,452 @@ app.delete('/api/comments/:commentId', auth, async (req, res) => {
 // ============ HASHTAGS ============
 app.get('/api/hashtags/trending', async (req, res) => {
   try {
-    const trending = await Hashtag.findAll
+    const trending = await Hashtag.findAll({ attributes: ['tag', 'post_count'], order: [['post_count', 'DESC']], limit: 10 });
+    res.json(trending);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/hashtags/:tag/posts', auth, async (req, res) => {
+  try {
+    const { tag } = req.params;
+    const hashtag = await Hashtag.findOne({ where: { tag: tag.toLowerCase() } });
+    if (!hashtag) return res.json({ posts: [], count: 0, tag });
+    const posts = await hashtag.getPosts({
+      where: { is_deleted: false },
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+      order: [['created_at', 'DESC']],
+      limit: 50,
+    });
+    res.json({ posts, count: posts.length, tag: hashtag.tag });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ SEARCH ============
+app.get('/api/search/posts', auth, async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.trim() === '') return res.json({ posts: [], count: 0 });
+    const searchTerm = `%${q.trim().toLowerCase()}%`;
+    const posts = await Post.findAll({
+      where: { is_deleted: false, [Op.or]: [sequelize.where(sequelize.fn('LOWER', sequelize.col('content')), 'LIKE', searchTerm)] },
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+      order: [['created_at', 'DESC']],
+      limit: 50,
+    });
+    res.json({ posts, count: posts.length });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/search/users', auth, async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.trim() === '') return res.json({ users: [], count: 0 });
+    const searchTerm = `%${q.trim().toLowerCase()}%`;
+    const users = await User.findAll({
+      where: { [Op.or]: [sequelize.where(sequelize.fn('LOWER', sequelize.col('username')), 'LIKE', searchTerm), sequelize.where(sequelize.fn('LOWER', sequelize.col('full_name')), 'LIKE', searchTerm)] },
+      attributes: ['id', 'username', 'full_name', 'avatar_url', 'bio'],
+      limit: 30,
+    });
+    res.json({ users, count: users.length });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ DIRECT MESSAGES ============
+app.get('/api/conversations', auth, async (req, res) => {
+  try {
+    const conversations = await Conversation.findAll({
+      where: { participants: { [Op.contains]: [req.user.id] } },
+      include: [{ model: Message, as: 'messages', limit: 1, order: [['created_at', 'DESC']] }],
+      order: [['last_message_at', 'DESC']],
+    });
+    const enriched = await Promise.all(conversations.map(async (conv) => {
+      const otherUserId = conv.participants.find((id) => id !== req.user.id);
+      const otherUser = await User.findByPk(otherUserId, { attributes: ['id', 'username', 'full_name', 'avatar_url'] });
+      return { id: conv.id, otherUser, lastMessage: conv.messages?.[0]?.content || '', lastMessageAt: conv.last_message_at };
+    }));
+    res.json(enriched);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/conversations/:conversationId/messages', auth, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const conversation = await Conversation.findByPk(conversationId);
+    if (!conversation || !conversation.participants.includes(req.user.id)) return res.status(403).json({ error: 'Not authorized' });
+    const messages = await Message.findAll({
+      where: { conversation_id: conversationId },
+      include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+      order: [['created_at', 'ASC']],
+    });
+    await Message.update({ is_read: true, read_at: new Date() }, { where: { conversation_id: conversationId, sender_id: { [Op.ne]: req.user.id }, is_read: false } });
+    res.json(messages);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/conversations', auth, async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'User ID required' });
+    const otherUser = await User.findByPk(userId);
+    if (!otherUser) return res.status(404).json({ error: 'User not found' });
+    let conversation = await Conversation.findOne({ where: { participants: { [Op.contains]: [req.user.id, userId] } } });
+    if (!conversation) conversation = await Conversation.create({ participants: [req.user.id, userId] });
+    res.json(conversation);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/messages', auth, async (req, res) => {
+  try {
+    const { conversationId, content } = req.body;
+    if (!conversationId || !content.trim()) return res.status(400).json({ error: 'Invalid data' });
+    const conversation = await Conversation.findByPk(conversationId);
+    if (!conversation || !conversation.participants.includes(req.user.id)) return res.status(403).json({ error: 'Not authorized' });
+    const filterResult = await filterContent(content);
+    if (filterResult.isViolation) return res.status(403).json({ error: `Message blocked: ${filterResult.reason}` });
+    const message = await Message.create({ conversation_id: conversationId, sender_id: req.user.id, content: content.trim() });
+    await conversation.update({ last_message: content.trim(), last_message_at: new Date() });
+    const populated = await Message.findByPk(message.id, { include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'full_name', 'avatar_url'] }] });
+    const recipientId = conversation.participants.find((id) => id !== req.user.id);
+    const recipientSocket = userSockets.get(recipientId);
+    if (recipientSocket) io.to(recipientSocket).emit('new_message', populated);
+    res.status(201).json(populated);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ POLLS ============
+app.post('/api/polls', auth, async (req, res) => {
+  try {
+    const { post_id, question, options, expires_at, is_multiple_choice } = req.body;
+    if (!post_id || !question || !options || options.length < 2) return res.status(400).json({ error: 'Invalid poll data' });
+    const post = await Post.findByPk(post_id);
+    if (!post || post.user_id !== req.user.id) return res.status(403).json({ error: 'Unauthorized' });
+    const poll = await Poll.create({ post_id, question, expires_at, is_multiple_choice: is_multiple_choice || false });
+    await Promise.all(options.map((opt) => PollOption.create({ poll_id: poll.id, option_text: opt })));
+    const fullPoll = await Poll.findByPk(poll.id, { include: [{ model: PollOption, as: 'options' }] });
+    res.status(201).json(fullPoll);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/polls/:pollId/vote', auth, async (req, res) => {
+  try {
+    const { pollId } = req.params;
+    const { optionIds } = req.body;
+    if (!optionIds || !optionIds.length) return res.status(400).json({ error: 'Option required' });
+    const poll = await Poll.findByPk(pollId);
+    if (!poll) return res.status(404).json({ error: 'Poll not found' });
+    if (poll.expires_at && new Date(poll.expires_at) < new Date()) return res.status(400).json({ error: 'Poll expired' });
+    const existing = await PollVote.findOne({ where: { poll_id: pollId, user_id: req.user.id } });
+    if (existing) return res.status(400).json({ error: 'Already voted' });
+    const options = await PollOption.findAll({ where: { id: optionIds, poll_id: pollId } });
+    if (options.length !== optionIds.length) return res.status(400).json({ error: 'Invalid options' });
+    if (!poll.is_multiple_choice && optionIds.length > 1) return res.status(400).json({ error: 'Multiple choices not allowed' });
+    await Promise.all(optionIds.map((optId) => PollVote.create({ poll_id: pollId, user_id: req.user.id, option_id: optId })));
+    for (const optId of optionIds) await PollOption.increment('vote_count', { where: { id: optId } });
+    await poll.increment('total_votes', { by: optionIds.length });
+    const updatedPoll = await Poll.findByPk(pollId, { include: [{ model: PollOption, as: 'options' }] });
+    const post = await Post.findByPk(poll.post_id);
+    if (post) {
+      const viewers = [post.user_id];
+      for (const uid of viewers) {
+        const socketId = userSockets.get(uid);
+        if (socketId) io.to(socketId).emit('poll_update', { pollId, poll: updatedPoll });
+      }
+    }
+    res.json({ poll: updatedPoll });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/polls/:pollId/results', auth, async (req, res) => {
+  try {
+    const poll = await Poll.findByPk(req.params.pollId, { include: [{ model: PollOption, as: 'options' }] });
+    if (!poll) return res.status(404).json({ error: 'Poll not found' });
+    const hasVoted = await PollVote.findOne({ where: { poll_id: poll.id, user_id: req.user.id } });
+    res.json({ poll, userHasVoted: !!hasVoted });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ ANALYTICS ============
+app.post('/api/posts/:postId/view', auth, async (req, res) => {
+  try {
+    const post = await Post.findByPk(req.params.postId);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    await PostView.create({ post_id: req.params.postId, user_id: req.user.id });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/posts/:postId/analytics', auth, async (req, res) => {
+  try {
+    const post = await Post.findByPk(req.params.postId);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (post.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
+    const viewCount = await PostView.count({ where: { post_id: req.params.postId } });
+    const engagement = {
+      likes: post.likes_count,
+      comments: post.comments_count,
+      shares: post.shares_count,
+      total_engagement: post.likes_count + post.comments_count + post.shares_count,
+      engagement_rate: viewCount > 0 ? ((post.likes_count + post.comments_count + post.shares_count) / viewCount) * 100 : 0,
+    };
+    res.json({ post_id: post.id, content: post.content, created_at: post.created_at, views: viewCount, engagement });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/users/analytics', auth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const followerHistory = await FollowerHistory.findAll({ where: { user_id: userId }, order: [['recorded_at', 'ASC']] });
+    const posts = await Post.findAll({ where: { user_id: userId, is_deleted: false }, attributes: ['created_at', 'likes_count', 'comments_count', 'shares_count'] });
+    const hourlyEngagement = Array(24).fill(0);
+    const hourlyCounts = Array(24).fill(0);
+    const dailyEngagement = Array(7).fill(0);
+    posts.forEach((post) => {
+      const hour = new Date(post.created_at).getHours();
+      const day = new Date(post.created_at).getDay();
+      const engagement = post.likes_count + post.comments_count + post.shares_count;
+      hourlyEngagement[hour] += engagement;
+      hourlyCounts[hour] += 1;
+      dailyEngagement[day] += engagement;
+    });
+    const bestHours = hourlyEngagement.map((total, i) => ({ hour: i, avgEngagement: hourlyCounts[i] ? total / hourlyCounts[i] : 0 })).sort((a, b) => b.avgEngagement - a.avgEngagement).slice(0, 3);
+    const bestDays = dailyEngagement.map((total, i) => ({ day: i, totalEngagement: total })).sort((a, b) => b.totalEngagement - a.totalEngagement).slice(0, 2);
+    res.json({ follower_growth: followerHistory.map((entry) => ({ date: entry.recorded_at, count: entry.count })), best_times: { hours: bestHours, days: bestDays } });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/users/record-followers', auth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const users = await User.findAll({ attributes: ['id', 'followers_count'] });
+  for (const user of users) await FollowerHistory.create({ user_id: user.id, count: user.followers_count, recorded_at: new Date() });
+  res.json({ message: 'Follower history recorded' });
+});
+
+// ============ IMAGE UPLOAD ============
+app.post('/api/upload', auth, upload.single('image'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file' });
+  const result = await uploadToCloudinary(req.file.buffer);
+  res.json({ success: true, url: result.secure_url, public_id: result.public_id });
+});
+app.post('/api/upload/multiple', auth, upload.array('images', 4), async (req, res) => {
+  if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No files' });
+  const results = await Promise.all(req.files.map((f) => uploadToCloudinary(f.buffer)));
+  res.json({ success: true, images: results.map((r) => ({ url: r.secure_url, public_id: r.public_id })) });
+});
+app.delete('/api/upload/:publicId', auth, async (req, res) => {
+  await deleteFromCloudinary(req.params.publicId);
+  res.json({ success: true });
+});
+
+// ============ NOTIFICATIONS ============
+app.get('/api/notifications', auth, async (req, res) => {
+  const notifs = await Notification.findAll({ where: { user_id: req.user.id }, order: [['created_at', 'DESC']], limit: 50 });
+  res.json(notifs);
+});
+app.put('/api/notifications/:id/read', auth, async (req, res) => {
+  const notif = await Notification.findOne({ where: { id: req.params.id, user_id: req.user.id } });
+  if (!notif) return res.status(404).json({ error: 'Not found' });
+  await notif.update({ is_read: true, read_at: new Date() });
+  res.json({ message: 'Marked read' });
+});
+app.put('/api/notifications/read-all', auth, async (req, res) => {
+  await Notification.update({ is_read: true, read_at: new Date() }, { where: { user_id: req.user.id, is_read: false } });
+  res.json({ message: 'All marked read' });
+});
+
+// ============ ADMIN MODERATION LOGS & BLACKLIST ============
+app.get('/api/admin/moderation-logs', auth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const logs = await ModerationLog.findAll({ order: [['created_at', 'DESC']], limit: 100 });
+  res.json(logs);
+});
+app.put('/api/admin/moderation-logs/:id/review', auth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const log = await ModerationLog.findByPk(req.params.id);
+  if (!log) return res.status(404).json({ error: 'Not found' });
+  await log.update({ is_reviewed: true, reviewed_by: req.user.id });
+  res.json({ message: 'Reviewed' });
+});
+app.get('/api/admin/blacklist', auth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const keywords = await listBlacklistKeywords();
+  res.json({ keywords });
+});
+app.post('/api/admin/blacklist', auth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const { keyword, category } = req.body;
+  if (!keyword || keyword.trim() === '') return res.status(400).json({ error: 'Keyword required' });
+  await addBlacklistKeyword(keyword, category || 'custom', req.user.id);
+  res.json({ message: 'Keyword added to blacklist' });
+});
+app.delete('/api/admin/blacklist/:keyword', auth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const { keyword } = req.params;
+  await removeBlacklistKeyword(keyword);
+  res.json({ message: 'Keyword removed from blacklist' });
+});
+
+// ============ DATA EXPORT / IMPORT ============
+const collectUserData = async (userId) => {
+  const user = await User.findByPk(userId, { attributes: { exclude: ['password_hash'] } });
+  const posts = await Post.findAll({ where: { user_id: userId, is_deleted: false }, order: [['created_at', 'ASC']] });
+  const comments = await Comment.findAll({ where: { user_id: userId, is_deleted: false }, order: [['created_at', 'ASC']] });
+  const likes = await Like.findAll({ where: { user_id: userId }, include: [{ model: Post, as: 'post', attributes: ['id'] }] });
+  const followers = await Follower.findAll({ where: { following_id: userId, status: 'accepted' }, include: [{ model: User, as: 'follower', attributes: ['id', 'username'] }] });
+  const following = await Follower.findAll({ where: { follower_id: userId, status: 'accepted' }, include: [{ model: User, as: 'following', attributes: ['id', 'username'] }] });
+  const conversations = await Conversation.findAll({ where: { participants: { [Op.contains]: [userId] } } });
+  return {
+    user,
+    posts,
+    comments,
+    likes: likes.map(l => ({ post_id: l.post_id, created_at: l.created_at })),
+    followers: followers.map(f => f.follower),
+    following: following.map(f => f.following),
+    conversations: conversations.map(c => c.id),
+    export_date: new Date().toISOString(),
+  };
+};
+
+app.get('/api/user/export', auth, async (req, res) => {
+  try {
+    const data = await collectUserData(req.user.id);
+    await ExportLog.create({ user_id: req.user.id, type: 'export', status: 'success', details: { recordCount: data.posts.length } });
+    res.setHeader('Content-Disposition', `attachment; filename=aureon-export-${req.user.id}-${Date.now()}.json`);
+    res.setHeader('Content-Type', 'application/json');
+    res.json(data);
+  } catch (error) {
+    console.error('Export error:', error);
+    res.status(500).json({ error: 'Export failed' });
+  }
+});
+
+app.post('/api/user/import', auth, upload.single('importFile'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const fileContent = req.file.buffer.toString('utf8');
+    const importedData = JSON.parse(fileContent);
+    if (!importedData.user || !importedData.posts) throw new Error('Invalid file format');
+    let postsAdded = 0, commentsAdded = 0;
+    for (const post of importedData.posts) {
+      const existing = await Post.findOne({ where: { user_id: req.user.id, content: post.content, created_at: post.created_at } });
+      if (!existing) {
+        await Post.create({
+          user_id: req.user.id,
+          content: post.content,
+          media_urls: post.media_urls || [],
+          visibility: post.visibility || 'public',
+          created_at: post.created_at,
+          updated_at: post.updated_at,
+        });
+        postsAdded++;
+      }
+    }
+    for (const comment of importedData.comments) {
+      const existing = await Comment.findOne({ where: { user_id: req.user.id, content: comment.content, post_id: comment.post_id, created_at: comment.created_at } });
+      if (!existing) {
+        await Comment.create({
+          user_id: req.user.id,
+          post_id: comment.post_id,
+          content: comment.content,
+          parent_comment_id: comment.parent_comment_id || null,
+          created_at: comment.created_at,
+        });
+        commentsAdded++;
+      }
+    }
+    await ExportLog.create({ user_id: req.user.id, type: 'import', status: 'success', details: { postsAdded, commentsAdded } });
+    res.json({ message: `Import completed: ${postsAdded} posts, ${commentsAdded} comments added` });
+  } catch (error) {
+    console.error('Import error:', error);
+    res.status(500).json({ error: 'Import failed: ' + error.message });
+  }
+});
+
+app.get('/api/admin/backup', auth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  try {
+    const tables = ['users', 'posts', 'comments', 'followers', 'messages', 'conversations', 'hashtags', 'post_hashtags', 'likes', 'notifications', 'reports', 'moderation_logs'];
+    const backupData = {};
+    for (const table of tables) {
+      const [results] = await sequelize.query(`SELECT * FROM ${table};`);
+      backupData[table] = results;
+    }
+    res.setHeader('Content-Disposition', `attachment; filename=aureon-backup-${Date.now()}.json`);
+    res.setHeader('Content-Type', 'application/json');
+    res.json(backupData);
+  } catch (error) {
+    console.error('Backup error:', error);
+    res.status(500).json({ error: 'Backup failed' });
+  }
+});
+
+app.post('/api/user/import-twitter', auth, async (req, res) => {
+  res.status(501).json({ error: 'Twitter import not yet implemented' });
+});
+
+// ============ TEMPORARY DATABASE SYNC ============
+app.get('/api/sync-db', async (req, res) => {
+  try {
+    await sequelize.sync({ alter: true });
+    res.json({ message: '✅ Database synced successfully!' });
+  } catch (error) {
+    console.error('Sync error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ 404 & ERROR HANDLERS ============
+app.use((req, res) => {
+  res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });
+});
+app.use((err, req, res, next) => {
+  console.error('Global error:', err);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+// ============ START SERVER ============
+const startServer = async () => {
+  try {
+    await sequelize.authenticate();
+    console.log('✅ Database connected');
+    await sequelize.sync({ alter: true });
+    console.log('✅ Database synced');
+    setInterval(() => cleanup(), 60 * 60 * 1000);
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`\n🚀 Server on http://0.0.0.0:${PORT}`);
+      console.log(`📝 Health: http://localhost:${PORT}/health`);
+      console.log(`🔌 WebSocket enabled\n`);
+    });
+  } catch (err) {
+    console.error('❌ Failed to start server:', err.message);
+    process.exit(1);
+  }
+};
+startServer();
