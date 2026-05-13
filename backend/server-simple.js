@@ -433,11 +433,11 @@ app.get('/api/posts/feed', auth, async (req, res) => {
       });
     }
 
-    // Add user reactions to each post
+    /* Add user reactions to each post
     const userReactions = await PostReaction.findAll({
       where: { user_id: req.user.id, post_id: { [Op.in]: posts.map(p => p.id) } },
       attributes: ['post_id', 'type'],
-    });
+    });*/
     const reactionMap = {};
     userReactions.forEach(r => { reactionMap[r.post_id] = r.type; });
     posts = posts.map(p => ({ ...p.toJSON(), userReaction: reactionMap[p.id] || null }));
