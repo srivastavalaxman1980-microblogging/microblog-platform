@@ -1282,6 +1282,62 @@ const reactionMap = {};
 userReactions.forEach(r => { reactionMap[r.post_id] = r.type; });
 posts = posts.map(p => ({ ...p.toJSON(), userReaction: reactionMap[p.id] || null }));
 
+app.get('/api/posts/feed', auth, async (req, res) => {
+  try {
+    const blockedUsers = await UserBlock.findAll({
+      where: { blocker_id: req.user.id, type: 'block' },
+      attributes: ['blocked_id'],
+    });
+    const blockedIds = blockedUsers.map((b) => b.blocked_id);
+
+    const mutedKeywords = await UserMutedKeyword.findAll({
+      where: { user_id: req.user.id },
+      attributes: ['keyword'],
+    });
+    const keywords = mutedKeywords.map((k) => k.keyword);
+
+    let posts = await Post.findAll({
+      where: { is_deleted: false, user_id: { [Op.notIn]: blockedIds } },
+      include: [
+        { model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] },
+        {
+          model: Post,
+          as: 'original',
+          include: [{ model: User, as: 'user', attributes: ['id', 'username', 'full_name', 'avatar_url'] }],
+        },
+      ],
+      order: [['created_at', 'DESC']],
+      limit: 100,
+    });
+
+    if (keywords.length) {
+      posts = posts.filter((post) => {
+        const text = (post.content + ' ' + (post.original?.content || '')).toLowerCase();
+        return !keywords.some((kw) => text.includes(kw));
+      });
+    }
+
+    // ---- ADD USER REACTIONS (inside the async function) ----
+    const userReactions = await PostReaction.findAll({
+      where: { user_id: req.user.id, post_id: { [Op.in]: posts.map(p => p.id) } },
+      attributes: ['post_id', 'type'],
+    });
+    const reactionMap = {};
+    userReactions.forEach(r => { reactionMap[r.post_id] = r.type; });
+    posts = posts.map(p => ({ ...p.toJSON(), userReaction: reactionMap[p.id] || null }));
+
+    // Track view for each post (asynchronously, don't await)
+    for (const post of posts) {
+      PostView.create({ post_id: post.id, user_id: req.user.id }).catch(() => {});
+    }
+
+    res.json({ posts, count: posts.length });
+  } catch (error) {
+    console.error('Feed error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============ 404 & ERROR HANDLERS ============
 app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });
